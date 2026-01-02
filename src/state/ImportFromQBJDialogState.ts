@@ -22,7 +22,7 @@ export class ImportFromQBJDialogState {
         makeAutoObservable(this);
 
         // TODO: Game format should come from the constructor
-        this.customizeGameFormat = new CustomizeGameFormatState(GameFormats.ACFGameFormat);
+        this.customizeGameFormat = new CustomizeGameFormatState(GameFormats.StandardPowersMACFGameFormat);
         this.match = undefined;
         this.packet = undefined;
         this.pivotKey = ImportFromQBJPivotKey.Match;
@@ -48,10 +48,32 @@ export class ImportFromQBJDialogState {
 
     public setMatch(match: IMatch): void {
         this.match = match;
-        this.qbjStatus = {
-            isError: false,
-            status: `${this.match.match_teams.map((team) => team.team.name).join(" vs. ")} loaded`,
-        };
+        if (this.match == undefined) {
+            this.qbjStatus = {
+                isError: true,
+                status: "No match found in the QBJ file",
+            };
+        } else if (this.match.match_teams == undefined) {
+            this.qbjStatus = {
+                isError: true,
+                status: "No match teams found in the QBJ file",
+            };
+            this.match = undefined;
+        } else {
+            try {
+                this.qbjStatus = {
+                    isError: false,
+                    status: `${this.match.match_teams.map((team) => team.team.name).join(" vs. ")} loaded`,
+                };
+            } catch (e) {
+                const status: string = (e as Error).message ?? "Unknown error";
+                this.qbjStatus = {
+                    isError: true,
+                    status: status,
+                };
+                this.match = undefined;
+            }
+        }
     }
 
     public setPacket(packet: PacketState): void {

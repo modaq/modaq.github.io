@@ -537,6 +537,7 @@ export function toQBJ(game: GameState, packetName?: string, round?: number): IMa
 
     const matchQuestions: IMatchQuestion[] = [];
     let tossupNumber = 1;
+    let bonusNumber = 1;
     const teamChangesInCycle: Set<string> = new Set<string>();
 
     // TODO: Loop until the end of the game, not the number of cycles
@@ -648,6 +649,7 @@ export function toQBJ(game: GameState, packetName?: string, round?: number): IMa
                 // TODO: Unclear on how thrown out bonuses should be handled, since the replacement_bonus is just the
                 // bonus right now. Just add an event for now
                 noteworthyEvents.push(`Bonus thrown out on question ${thrownOutBonus.questionIndex + 1}`);
+                bonusNumber++;
             }
         }
 
@@ -712,17 +714,19 @@ export function toQBJ(game: GameState, packetName?: string, round?: number): IMa
                 question: {
                     parts: cycle.bonusAnswer.parts.length,
                     type: "bonus",
-                    question_number: cycle.bonusAnswer.bonusIndex + 1,
+                    question_number: bonusNumber,
                 },
                 parts,
             };
             matchQuestion.bonus = matchBonus;
+
+            bonusNumber++;
         }
 
         if (cycle.tossupProtests) {
             for (const protest of cycle.tossupProtests) {
                 noteworthyEvents.push(
-                    `Tossup protest on question ${protest.questionIndex + 1}. Team "${
+                    `Tossup protest on tossup #${protest.questionIndex + 1}. Team "${
                         protest.teamName
                     }" protested because of this reason: "${protest.reason}".`
                 );
@@ -732,9 +736,9 @@ export function toQBJ(game: GameState, packetName?: string, round?: number): IMa
         if (cycle.bonusProtests) {
             for (const protest of cycle.bonusProtests) {
                 noteworthyEvents.push(
-                    `Bonus protest on question ${protest.questionIndex + 1}. Team "${
-                        protest.teamName
-                    }" protested part ${protest.partIndex + 1} because of this reason: "${protest.reason}".`
+                    `Bonus protest on bonus #${protest.questionIndex + 1}. Team "${protest.teamName}" protested part ${
+                        protest.partIndex + 1
+                    } because of this reason: "${protest.reason}".`
                 );
             }
         }

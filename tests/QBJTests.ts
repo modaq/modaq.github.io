@@ -1179,10 +1179,10 @@ describe("QBJTests", () => {
                     const lines: string[] = match.notes.split("\n");
                     expect(lines.length).to.equal(2);
                     expect(lines[0]).to.equal(
-                        `Tossup protest on question 1. Team "${firstTeamPlayers[0].teamName}" protested because of this reason: "${firstProtestReason}".`
+                        `Tossup protest on tossup #1. Team "${firstTeamPlayers[0].teamName}" protested because of this reason: "${firstProtestReason}".`
                     );
                     expect(lines[1]).to.equal(
-                        `Tossup protest on question 2. Team "${secondTeamPlayer.teamName}" protested because of this reason: "${secondProtestReason}".`
+                        `Tossup protest on tossup #2. Team "${secondTeamPlayer.teamName}" protested because of this reason: "${secondProtestReason}".`
                     );
                 }
             );
@@ -1248,10 +1248,10 @@ describe("QBJTests", () => {
                     const lines: string[] = match.notes.split("\n");
                     expect(lines.length).to.equal(2);
                     expect(lines[0]).to.equal(
-                        `Bonus protest on question 1. Team "${firstTeamPlayers[0].teamName}" protested part 1 because of this reason: "${firstProtestReason}".`
+                        `Bonus protest on bonus #1. Team "${firstTeamPlayers[0].teamName}" protested part 1 because of this reason: "${firstProtestReason}".`
                     );
                     expect(lines[1]).to.equal(
-                        `Bonus protest on question 2. Team "${secondTeamPlayer.teamName}" protested part 3 because of this reason: "${secondProtestReason}".`
+                        `Bonus protest on bonus #2. Team "${secondTeamPlayer.teamName}" protested part 3 because of this reason: "${secondProtestReason}".`
                     );
                 }
             );
@@ -1338,6 +1338,71 @@ describe("QBJTests", () => {
                         0,
                         0,
                     ]);
+                }
+            );
+        });
+        it("Thrown out bonus on question before correct buzz", () => {
+            verifyToQBJ(
+                (game) => {
+                    game.cycles[0].addCorrectBuzz(
+                        {
+                            player: firstTeamPlayers[0],
+                            points: 10,
+                            position: 1,
+                            isLastWord: true,
+                        },
+                        1,
+                        game.gameFormat,
+                        0,
+                        3
+                    );
+                    game.cycles[1].addCorrectBuzz(
+                        {
+                            player: firstTeamPlayers[0],
+                            points: 10,
+                            position: 1,
+                            isLastWord: true,
+                        },
+                        1,
+                        game.gameFormat,
+                        0,
+                        3
+                    );
+                    game.cycles[0].addThrownOutBonus(0);
+                    game.cycles[0].setBonusPartAnswer(0, firstTeamPlayers[0].teamName, 10);
+                    game.cycles[1].setBonusPartAnswer(1, firstTeamPlayers[0].teamName, 10);
+                },
+                (match) => {
+                    expect(match.tossups_read).to.equal(4);
+                    expect(match.match_questions.map((q) => q.question_number)).to.deep.equal([1, 2, 3, 4]);
+
+                    if (match.notes == undefined) {
+                        assert.fail("match.notes should be defined.");
+                    }
+
+                    const lines: string[] = match.notes.split("\n");
+                    expect(lines.length).to.equal(1);
+                    expect(lines[0]).to.equal("Bonus thrown out on question 1");
+
+                    // TODO: We currently don't set the bonus replacement question, so we'll need to test that once we do
+
+                    const firstQuestion = match.match_questions[0];
+                    if (firstQuestion.bonus == undefined) {
+                        assert.fail("No bonus on the first question");
+                    }
+
+                    expect(firstQuestion.bonus.parts.length).to.equal(3);
+                    expect(firstQuestion.bonus.parts.map((part) => part.controlled_points)).to.deep.equal([10, 0, 0]);
+                    expect(firstQuestion.bonus.question?.question_number).to.equal(2);
+
+                    const secondQuestion = match.match_questions[1];
+                    if (secondQuestion.bonus == undefined) {
+                        assert.fail("No bonus on the second question");
+                    }
+
+                    expect(secondQuestion.bonus.parts.length).to.equal(3);
+                    expect(secondQuestion.bonus.parts.map((part) => part.controlled_points)).to.deep.equal([0, 10, 0]);
+                    expect(secondQuestion.bonus.question?.question_number).to.equal(3);
                 }
             );
         });
