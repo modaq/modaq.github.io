@@ -210,7 +210,9 @@ export class GameState {
                     const tossup: Tossup | undefined = this.packet.tossups[tossupProtest.questionIndex];
 
                     if (tossup != undefined) {
+                        let rewardOtherTeamPoints = true;
                         let tossupTeamIndex: number = tossupProtest.teamName === this.teamNames[0] ? 0 : 1;
+
                         if (cycle.correctBuzz) {
                             // If the correct buzz is for the protesting team, then this should be for "against"
                             if (
@@ -219,6 +221,14 @@ export class GameState {
                             ) {
                                 tossupTeamIndex = 1 - tossupTeamIndex;
                             }
+
+                            // The other team negged before the team they're protesting, so they couldn't score any
+                            // additional points even if the protest went through.
+                            rewardOtherTeamPoints =
+                                cycle.wrongBuzzes == undefined ||
+                                !cycle.wrongBuzzes.some(
+                                    (buzz) => buzz.marker.player.teamName !== tossupProtest.teamName
+                                );
 
                             // We have a correct buzz... we need to discount this buzz for the other team, plus any
                             // bonus they got
@@ -241,18 +251,28 @@ export class GameState {
                             swings[1 - tossupTeamIndex].against += correctTossupPoints + bonusPoints;
                         }
 
-                        const bonusIndex: number = this.getBonusIndex(i);
-                        const potentialBonusPoints =
-                            this.packet.bonuses[bonusIndex]?.parts.reduce(
-                                (previous, current) => current.value + previous,
-                                0
-                            ) ?? 0;
-
                         // Need to remove the neg (subtract) and add what the correct value would be
-                        swings[tossupTeamIndex].for +=
-                            tossup.getPointsAtPosition(this.gameFormat, tossupProtest.position, /* isCorrect */ true) -
-                            tossup.getPointsAtPosition(this.gameFormat, tossupProtest.position, /* isCorrect */ false) +
-                            potentialBonusPoints;
+                        if (rewardOtherTeamPoints) {
+                            const bonusIndex: number = this.getBonusIndex(i);
+                            const potentialBonusPoints =
+                                this.packet.bonuses[bonusIndex]?.parts.reduce(
+                                    (previous, current) => current.value + previous,
+                                    0
+                                ) ?? 0;
+
+                            swings[tossupTeamIndex].for +=
+                                tossup.getPointsAtPosition(
+                                    this.gameFormat,
+                                    tossupProtest.position,
+                                    /* isCorrect */ true
+                                ) -
+                                tossup.getPointsAtPosition(
+                                    this.gameFormat,
+                                    tossupProtest.position,
+                                    /* isCorrect */ false
+                                ) +
+                                potentialBonusPoints;
+                        }
                     }
                 }
             }
@@ -293,12 +313,19 @@ export class GameState {
         for (let i = cycleIndex; i >= 0; i--) {
             const cycle: Cycle = this.cycles[i];
 
-            if (
-                cycle.playerJoins &&
-                cycle.playerJoins.some((joinEvent) => PlayerUtils.playersEqual(player, joinEvent.inPlayer))
-            ) {
-                // We have a current or earlier join event with no leave events. Adding a player now is a no-op.
-                return;
+            if (cycle.playerJoins) {
+                const joinEvent: IPlayerJoinsEvent | undefined = cycle.playerJoins.find((event) =>
+                    PlayerUtils.playersEqual(player, event.inPlayer)
+                );
+                if (joinEvent) {
+                    if (!joinEvent.isInactive) {
+                        // We have a current or earlier active join event with no leave events. Adding a player now is a no-op.
+                        return;
+                    } else if (i == cycleIndex) {
+                        // If the player was added to the roster as inactive this cycle, replace that event with an active join.
+                        cycle.removePlayerJoins(joinEvent);
+                    }
+                }
             }
 
             if (cycle.subs) {
@@ -363,24 +390,21 @@ export class GameState {
                 }
             }
 
-            if (
-                cycle.playerJoins &&
-                cycle.playerJoins.some((joinEvent) => PlayerUtils.playersEqual(player, joinEvent.inPlayer))
-            ) {
-                // We're adding the player earlier, and there's no leave event. Remove that event and then add the new
-                // one
-                const joinEvent: IPlayerJoinsEvent | undefined = cycle.playerJoins.find((joinEvent) =>
-                    PlayerUtils.playersEqual(player, joinEvent.inPlayer)
+            if (cycle.playerJoins) {
+                const joinEvent: IPlayerJoinsEvent | undefined = cycle.playerJoins.find((event) =>
+                    PlayerUtils.playersEqual(player, event.inPlayer)
                 );
                 if (joinEvent) {
+                    // We're adding the player earlier, and there's no leave event. Remove that event and then add the new
+                    // one. This applies to both active and inactive joins, since the player is already on the roster now.
                     cycle.removePlayerJoins(joinEvent);
-                }
 
-                break;
+                    break;
+                }
             }
         }
 
-        this.cycles[cycleIndex].addPlayerJoins(player);
+        this.cycles[cycleIndex].addPlayerJoins(player, /* isInactive */ false);
     }
 
     public addNewPlayer(player: Player): void {
@@ -440,7 +464,9 @@ export class GameState {
                     throw new Error(`Tried to add ${join.inPlayer.name}, who isn't on team ${teamName}`);
                 }
 
-                activePlayers.push(inPlayer);
+                if (!join.isInactive) {
+                    activePlayers.push(inPlayer);
+                }
             }
 
             const teamSubs: ISubstitutionEvent[] = subs?.filter((sub) => sub.inPlayer.teamName === teamName) ?? [];
@@ -477,13 +503,24 @@ export class GameState {
     }
 
     public getBonusIndex(cycleIndex: number): number {
+        // If this cycle has a protest replacement, return that specific index directly.
+        const currentCycle: Cycle = this.cycles[cycleIndex];
+        const protestReplacementIndex: number | undefined = currentCycle.thrownOutBonuses?.find(
+            (e) => e.replacementQuestionIndex != undefined
+        )?.replacementQuestionIndex;
+        if (protestReplacementIndex != undefined) {
+            return protestReplacementIndex >= this.packet.bonuses.length ? -1 : protestReplacementIndex;
+        }
+
         if (this.gameFormat.pairTossupsBonuses) {
-            // Same as the cycle index plus thrown out questions
+            // Same as the cycle index plus sequential (non-protest) thrown-out bonuses
             let thrownOutBonusesCount = 0;
             for (let i = 0; i <= cycleIndex; i++) {
                 const cycle: Cycle = this.cycles[i];
                 if (cycle.thrownOutBonuses !== undefined) {
-                    thrownOutBonusesCount += cycle.thrownOutBonuses.length;
+                    thrownOutBonusesCount += cycle.thrownOutBonuses.filter(
+                        (e) => e.replacementQuestionIndex == undefined
+                    ).length;
                 }
             }
 
@@ -500,7 +537,9 @@ export class GameState {
             }
 
             if (cycle.thrownOutBonuses != undefined) {
-                usedBonusesCount += cycle.thrownOutBonuses.length;
+                usedBonusesCount += cycle.thrownOutBonuses.filter(
+                    (e) => e.replacementQuestionIndex == undefined
+                ).length;
             }
         }
 
@@ -525,11 +564,25 @@ export class GameState {
     }
 
     public getTossupIndex(cycleIndex: number): number {
+        // If this cycle has a protest replacement, return that specific index directly, or -1 if it points past the
+        // packet (e.g. a QBJ loaded with a smaller packet than the game used), matching getBonusIndex.
+        const currentCycle: Cycle = this.cycles[cycleIndex];
+        const protestReplacementIndex: number | undefined = currentCycle.thrownOutTossups?.find(
+            (e) => e.replacementQuestionIndex != undefined
+        )?.replacementQuestionIndex;
+        if (protestReplacementIndex != undefined) {
+            return protestReplacementIndex >= this.packet.tossups.length ? -1 : protestReplacementIndex;
+        }
+
+        // Otherwise, offset by the number of sequential (non-protest) throw-outs up to and including this cycle.
+        // Protest throw-outs don't shift the sequential order for subsequent cycles.
         let thrownOutTossupsCount = 0;
         for (let i = 0; i <= cycleIndex; i++) {
             const cycle: Cycle = this.cycles[i];
             if (cycle.thrownOutTossups !== undefined) {
-                thrownOutTossupsCount += cycle.thrownOutTossups.length;
+                thrownOutTossupsCount += cycle.thrownOutTossups.filter(
+                    (e) => e.replacementQuestionIndex == undefined
+                ).length;
             }
         }
 

@@ -23,7 +23,7 @@ import { Theme, ThemeContext } from "@fluentui/react";
 export const BuzzMenu = observer(function BuzzMenu(props: IBuzzMenuProps) {
     const onHideBuzzMenu: () => void = React.useCallback(() => onBuzzMenuDismissed(props), [props]);
 
-    const teamNames: string[] = props.appState.game.teamNames;
+    const teamNames: string[] = props.appState.activeGame.teamNames;
     const menuItems: IContextualMenuItem[] = [];
 
     return (
@@ -61,7 +61,7 @@ function getPlayerMenuItems(props: IBuzzMenuProps, theme: Theme | undefined, tea
     // TODO: Need to support Wrong (1st buzz) and Wrong (2nd buzz)
     // TODO: Add some highlighting/indicator on the player to show that they have a buzz in a different word
 
-    const players: Set<Player> = props.appState.game.getActivePlayers(teamName, props.appState.uiState.cycleIndex);
+    const players: Set<Player> = props.appState.activeGame.getActivePlayers(teamName, props.appState.uiState.cycleIndex);
     const menuItems: IContextualMenuItem[] = [];
 
     let index = 0;
@@ -78,7 +78,9 @@ function getPlayerMenuItems(props: IBuzzMenuProps, theme: Theme | undefined, tea
                     PlayerUtils.playersEqual(buzz.marker.player, player) && buzz.marker.position === props.wordIndex
             ) >= 0;
         const isProtestChecked: boolean =
-            props.cycle.tossupProtests?.findIndex((protest) => protest.position === props.wordIndex) != undefined;
+            (isCorrectChecked || isWrongChecked) &&
+            props.cycle.tossupProtests != undefined &&
+            props.cycle.tossupProtests.findIndex((protest) => protest.teamName === player.teamName) >= 0;
 
         const buzzMenuItemData: IBuzzMenuItemData = { props, player };
 
@@ -148,6 +150,9 @@ function onBuzzMenuDismissed(props: IBuzzMenuProps): void {
 
     if (props.appState.uiState.buzzMenuState.clearSelectedWordOnClose) {
         props.appState.uiState.setSelectedWordIndex(-1);
+    } else {
+        const selectedWord = (props.target as React.MutableRefObject<HTMLElement | null>)?.current;
+        selectedWord?.focus();
     }
 }
 
@@ -168,25 +173,25 @@ function onCorrectClicked(
         // Don't include a bonus index if there should be no bonus for this correct buzz
         // TODO: This is an example of logic that should be moved out of the view layer
         const bonusIndex: number | undefined =
-            props.appState.game.gameFormat.overtimeIncludesBonuses ||
-            props.appState.uiState.cycleIndex < props.appState.game.gameFormat.regulationTossupCount
+            props.appState.activeGame.gameFormat.overtimeIncludesBonuses ||
+            props.appState.uiState.cycleIndex < props.appState.activeGame.gameFormat.regulationTossupCount
                 ? props.bonusIndex
                 : undefined;
 
         // If we don't know the number of parts, assume it's 3, which is standard
         const partsCount: number | undefined =
-            bonusIndex != undefined && props.appState.game.packet.bonuses[bonusIndex] != undefined
-                ? props.appState.game.packet.bonuses[bonusIndex].parts.length
+            bonusIndex != undefined && props.appState.activeGame.packet.bonuses[bonusIndex] != undefined
+                ? props.appState.activeGame.packet.bonuses[bonusIndex].parts.length
                 : 3;
 
         props.cycle.addCorrectBuzz(
             {
                 player,
                 position: item.data.props.wordIndex,
-                points: props.tossup.getPointsAtPosition(props.appState.game.gameFormat, item.data.props.wordIndex),
+                points: props.tossup.getPointsAtPosition(props.appState.activeGame.gameFormat, item.data.props.wordIndex),
             },
             props.tossupNumber - 1,
-            props.appState.game.gameFormat,
+            props.appState.activeGame.gameFormat,
             bonusIndex,
             partsCount
         );
@@ -205,7 +210,7 @@ function onWrongClicked(
     const { props, player } = { ...item.data };
 
     if (item.checked) {
-        props.cycle.removeWrongBuzz(player, props.appState.game.gameFormat);
+        props.cycle.removeWrongBuzz(player, props.appState.activeGame.gameFormat);
     } else if (item.checked === false) {
         const marker: IBuzzMarker = {
             isLastWord: props.isLastWord,
@@ -217,7 +222,7 @@ function onWrongClicked(
         // If we're at the end of the question, or if there's already been a neg from a different team, then make it a
         // no penalty buzz
         const pointsAtPosition: number = props.tossup.getPointsAtPosition(
-            props.appState.game.gameFormat,
+            props.appState.activeGame.gameFormat,
             props.wordIndex,
             false
         );
@@ -230,7 +235,7 @@ function onWrongClicked(
             }
         }
 
-        props.cycle.addWrongBuzz(marker, props.tossupNumber - 1, props.appState.game.gameFormat);
+        props.cycle.addWrongBuzz(marker, props.tossupNumber - 1, props.appState.activeGame.gameFormat);
     }
 }
 
@@ -246,7 +251,7 @@ function onProtestClicked(
     const { props, player } = { ...item.data };
 
     if (item.checked) {
-        props.cycle.removeTossupProtest(player.teamName);
+        props.appState.uiState.showRemoveTossupProtestDialog(props.cycle, player.teamName);
     } else if (item.checked === false) {
         props.appState.uiState.setPendingTossupProtest(player.teamName, props.tossupNumber - 1, props.wordIndex);
     }

@@ -7,7 +7,7 @@ import { useId } from "@fluentui/react-hooks";
 import { UIState } from "../state/UIState";
 import { AppState } from "../state/AppState";
 import { ILabelStyles, Label, TooltipHost } from "@fluentui/react";
-import { StateContext } from "../contexts/StateContext";
+import { useAppState } from "../contexts/StateContext";
 import { StatusDisplayType } from "../state/StatusDisplayType";
 
 const ReturnKeyCode = 13;
@@ -38,17 +38,15 @@ const nextButtonStyle: Partial<IButtonStyles> = {
 };
 
 export const CycleChooser = observer(function CycleChooser() {
-    const appState: AppState = React.useContext(StateContext);
-    const onPreviousClickHandler = React.useCallback(() => onPreviousClick(appState), [appState]);
-    const onNextClickHandler = React.useCallback(() => onNextClick(appState), [appState]);
+    const appState: AppState = useAppState();
+    const onPreviousClickHandler = (): void => onPreviousClick(appState);
+    const onNextClickHandler = (): void => onNextClick(appState);
     const onProposedQuestionNumberBlurHandler = React.useCallback((ev) => onProposedQuestionNumberBlur(ev, appState), [
         appState,
     ]);
-    const onProposedQuestionNumberKeyDownHandler = React.useCallback(
-        (ev) => onProposedQuestionNumberKeyDown(ev, appState),
-        [appState]
-    );
-    const onQuestionLabelDoubleClickHandler = React.useCallback(() => onQuestionLabelDoubleClick(appState), [appState]);
+    const onProposedQuestionNumberKeyDownHandler = (ev: React.KeyboardEvent<HTMLInputElement>): void =>
+        onProposedQuestionNumberKeyDown(ev, appState);
+    const onQuestionLabelDoubleClickHandler = (): void => onQuestionLabelDoubleClick(appState);
 
     const uiState: UIState = appState.uiState;
 
@@ -60,6 +58,7 @@ export const CycleChooser = observer(function CycleChooser() {
             id={previousButtonTooltipId}
         >
             <DefaultButton
+                className="previous-question"
                 key="previousButton"
                 onClick={onPreviousClickHandler}
                 disabled={uiState.cycleIndex === 0}
@@ -77,6 +76,7 @@ export const CycleChooser = observer(function CycleChooser() {
         nextButtonTooltip = "Export";
         nextButton = (
             <PrimaryButton
+                className="next-question"
                 aria-describedby={nextButtonTooltip}
                 key="nextButton"
                 onClick={onNextClickHandler}
@@ -89,6 +89,7 @@ export const CycleChooser = observer(function CycleChooser() {
         nextButtonTooltip = "Next (N)";
         nextButton = (
             <DefaultButton
+                className="next-question"
                 aria-describedby={nextButtonTooltip}
                 key="nextButton"
                 onClick={onNextClickHandler}
@@ -111,6 +112,7 @@ export const CycleChooser = observer(function CycleChooser() {
     if (uiState.isEditingCycleIndex) {
         questionNumberViewer = (
             <TextField
+                inputClassName="question-number"
                 type="text"
                 defaultValue={questionNumber.toString()}
                 onBlur={onProposedQuestionNumberBlurHandler}
@@ -122,7 +124,12 @@ export const CycleChooser = observer(function CycleChooser() {
         );
     } else {
         questionNumberViewer = (
-            <Label key="questionViewer" styles={questionLableStyle} onDoubleClick={onQuestionLabelDoubleClickHandler}>
+            <Label
+                className="question-number"
+                key="questionViewer"
+                styles={questionLableStyle}
+                onDoubleClick={onQuestionLabelDoubleClickHandler}
+            >
                 Question #{questionNumber}
             </Label>
         );
@@ -139,7 +146,7 @@ export const CycleChooser = observer(function CycleChooser() {
 
 function shouldNextButtonExport(appState: AppState): boolean {
     const nextCycleIndex: number = appState.uiState.cycleIndex + 1;
-    return nextCycleIndex >= appState.game.playableCycles.length;
+    return nextCycleIndex >= appState.activeGame.playableCycles.length;
 }
 
 function onProposedQuestionNumberBlur(event: React.FocusEvent<HTMLInputElement>, appState: AppState): void {
@@ -182,7 +189,7 @@ function commitCycleIndex(appState: AppState, value: string): void {
     }
 
     const propsedCycleIndex: number = parseInt(value, 10);
-    if (propsedCycleIndex >= 1 && propsedCycleIndex <= appState.game.packet.tossups.length) {
+    if (propsedCycleIndex >= 1 && propsedCycleIndex <= appState.activeGame.packet.tossups.length) {
         appState.uiState.setCycleIndex(propsedCycleIndex - 1);
     }
 

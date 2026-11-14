@@ -16,22 +16,28 @@ import {
     Theme,
     IPalette,
 } from "@fluentui/react";
-import { AsyncTrunk } from "mobx-sync";
-import { configure } from "mobx";
+import { AsyncTrunk, KeyDefaultKey } from "mobx-sync";
+import { comparer, configure, IReactionDisposer, reaction } from "mobx";
 import { observer } from "mobx-react-lite";
 
 import * as PacketLoaderController from "./PacketLoaderController";
+import * as TossupQuestionController from "./TossupQuestionController";
 import { StateProvider } from "../contexts/StateContext";
 import { AppState } from "../state/AppState";
+import { watchReadAlongState } from "../speech/ReadAlongDiagnostics";
 import { GameViewer } from "./GameViewer";
 import { ModalDialogContainer } from "./ModalDialogContainer";
 import { IGameFormat } from "../state/IGameFormat";
 import { IPacket } from "../state/IPacket";
 import { IPlayer, Player } from "../state/TeamState";
-import { Bonus, ITossupWord, PacketState, Tossup } from "../state/PacketState";
+import { Bonus, PacketState } from "../state/PacketState";
 import { ICustomExport } from "../state/CustomExport";
+import { IHostSettings } from "../state/IHostSettings";
+import { IViewSettings } from "../state/IViewSettings";
 import { Cycle } from "../state/Cycle";
+import { UIState } from "../state/UIState";
 import { ModalVisibilityStatus } from "../state/ModalVisibilityStatus";
+import { IStatus } from "../IStatus";
 
 // Initialize Fluent UI icons when this is loaded, before the first render
 initializeIcons();
@@ -95,7 +101,12 @@ const darkModePalette: Partial<IPalette> = {
 };
 
 export const ModaqControl = observer(function ModaqControl(props: IModaqControlProps): JSX.Element {
-    const [appState]: [AppState, React.Dispatch<React.SetStateAction<AppState>>] = React.useState(AppState.instance);
+    const [appState]: [AppState, React.Dispatch<React.SetStateAction<AppState>>] = React.useState(() =>
+        createAppState(props)
+    );
+
+    // The read-along diagnostics (copied from its debug panel) describe this game's microphone settings
+    React.useEffect(() => watchReadAlongState(appState.uiState), [appState]);
 
     // We only want to run this effect once, which requires passing in an empty array of dependencies
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -109,10 +120,18 @@ export const ModaqControl = observer(function ModaqControl(props: IModaqControlP
     }, [appState, props.gameFormat]);
     React.useEffect(() => {
         if (props.packet != undefined) {
-            const packet: PacketState | undefined = PacketLoaderController.loadPacket(props.packet, props.packet.name);
+            const packet: PacketState | undefined = PacketLoaderController.loadPacket(
+                appState,
+                props.packet,
+                props.packet.name
+            );
             if (packet) {
                 appState.game.loadPacket(packet);
             }
+
+            // The "Packet loaded" message from this initial load has no UI surface of its own; clear it so it
+            // doesn't leak into other UI (e.g. the Add Questions dialog) that reads packetParseStatus.
+            appState.uiState.clearPacketStatus();
         }
     }, [appState, props.packet]);
     React.useEffect(() => {
@@ -187,6 +206,14 @@ export interface IModaqControlProps {
     hideNewGame?: boolean;
 
     /**
+     * If provided, the Add Questions dialog switches to a secret-code lookup mode: instead of uploading a packet
+     * file, the user enters an ID, and this callback is given that ID and should resolve to the replacement
+     * question packet (an `IPacket`), or an `IStatus` describing why the lookup failed. MODAQ has no knowledge of
+     * how or where the question is stored; the host application owns that lookup.
+     */
+    onFetchQuestionById?: (id: string) => Promise<IPacket | IStatus>;
+
+    /**
      * The packet for the current game. This should only be set once.
      */
     packet?: IPacket;
@@ -214,31 +241,98 @@ export interface IModaqControlProps {
     storeName?: string | undefined;
 
     /**
+     * Settings supplied by the host application to gate host-managed UI behavior: backup-only export,
+     * QBJ-only export dialog, substitutions-only roster, and host-managed game format. See
+     * {@link IHostSettings} for the individual flags.
+     */
+    hostSettings?: IHostSettings;
+
+    /**
+     * The moderator's display preferences (dark mode, font, hidden panels, etc.) to start with. This is only read on the
+     * first render. If `persistState` is true and there's already saved state for `storeName` (i.e. a game is being
+     * resumed), the saved state wins and these are ignored, since it reflects what the moderator last chose for that
+     * game.
+     */
+    initialViewSettings?: Partial<IViewSettings>;
+
+    /**
+     * Called with all of the current view settings whenever the moderator changes one of them, such as toggling dark
+     * mode or changing the font. It isn't called for the initial settings or for settings loaded from saved state.
+     */
+    onViewSettingsChange?: (settings: IViewSettings) => void;
+
+    /**
      * The URL to a Yet Another Packet Parser (YAPP) compatible service, which parses docx files. If this value isn't
      * defined, then packets must be in a JSON format.
      */
     yappServiceUrl?: string;
 }
 
+function createAppState(props: IModaqControlProps): AppState {
+    const appState: AppState = new AppState();
+
+    // Apply these before the first render so a new game doesn't flash the default settings. When resuming a game, the
+    // saved state is loaded asynchronously and would overwrite these anyway, so let the saved state win.
+    if (props.initialViewSettings != undefined && !hasSavedState(props)) {
+        appState.uiState.setViewSettings(props.initialViewSettings);
+    }
+
+    return appState;
+}
+
+function hasSavedState(props: IModaqControlProps): boolean {
+    if (!(props.persistState ?? true)) {
+        return false;
+    }
+
+    try {
+        return localStorage.getItem(props.storeName ?? KeyDefaultKey) != undefined;
+    } catch {
+        return false;
+    }
+}
+
 function initializeControl(appState: AppState, props: IModaqControlProps): () => void {
+    let isDisposed = false;
+    let disposeViewSettingsReaction: IReactionDisposer | undefined;
+
+    // Only start listening once any saved state has loaded, so the host is only told about the moderator's changes
+    const listenForViewSettingsChanges = (): void => {
+        if (isDisposed) {
+            return;
+        }
+
+        disposeViewSettingsReaction = reaction(
+            () => appState.uiState.viewSettings,
+            (settings: IViewSettings) => appState.uiState.onViewSettingsChange?.(settings),
+            { equals: comparer.structural }
+        );
+    };
+
     if (props.persistState) {
         configure({ enforceActions: "observed", computedRequiresReaction: true });
         const trunk = new AsyncTrunk(appState, { storage: localStorage, storageKey: props.storeName, delay: 200 });
         trunk.init(appState).then(() => {
+            appState.uiState.validateBuzzPointWordOffset();
+
             // Need to check if game is old and prompt the user if they want to restart the game.
             // Date subtraction gives you the number of milliseconds
             const lastUpdate: number | undefined = appState.game.lastUpdate?.getTime();
             if (lastUpdate && Date.now() - lastUpdate > minAgeToPromptForReset) {
-                appState.uiState.dialogState.showOKCancelMessageDialog(
-                    "Start new game?",
-                    "The loaded game is over 5 days old. Do you want to start a new game instead?",
-                    () => {
+                appState.uiState.dialogState.showOKCancelMessageDialog({
+                    title: "Start new game?",
+                    message: "The loaded game is over 5 days old. Do you want to start a new game instead?",
+                    onOK: () => {
                         appState.uiState.createPendingNewGame();
                         appState.uiState.dialogState.showNewGameDialog();
-                    }
-                );
+                    },
+                });
             }
+
+            listenForViewSettingsChanges();
         });
+    } else {
+        listenForViewSettingsChanges();
     }
 
     // We have to add the listener at the document layer, otherwise the event isn't picked up if the user clicks on
@@ -246,47 +340,177 @@ function initializeControl(appState: AppState, props: IModaqControlProps): () =>
     const keydownListener: (event: KeyboardEvent) => void = (event: KeyboardEvent) => shortcutHandler(event, appState);
     document.addEventListener("keyup", keydownListener);
 
+    // While the buzz point is being placed (after the first Space), Escape closes the pad and the arrow keys make sure
+    // the question has focus to move it with. Handled in the capture phase, before focused controls see the keys.
+    const buzzPointPlacementKeyListener: (event: KeyboardEvent) => void = (event: KeyboardEvent) =>
+        buzzPointPlacementShortcutHandler(event, appState);
+    document.addEventListener("keydown", buzzPointPlacementKeyListener, /* useCapture */ true);
+
+    // While a tossup is live, 1-8 mark that player's buzz correct and Shift+1-8 wrong. These act on keydown; the
+    // same key's keyup must then not also reach shortcutHandler, where numbers toggle bonus parts once a tossup
+    // is answered correctly.
+    const playerShortcutKeyListener: (event: KeyboardEvent) => void = (event: KeyboardEvent) =>
+        playerShortcutHandler(event, appState);
+    document.addEventListener("keydown", playerShortcutKeyListener, /* useCapture */ true);
+
+    // Space is the buzz shortcut, but it acts on keyup (above). Stop its keydown from scrolling the page (or
+    // clicking a focused button) when it's serving as the shortcut -- i.e. not while typing or in a dialog.
+    const preventSpaceScrollListener: (event: KeyboardEvent) => void = (event: KeyboardEvent) => {
+        if (
+            event.key === " " &&
+            !isTextEntryElement(event.target) &&
+            appState.uiState.dialogState.visibleDialog === ModalVisibilityStatus.None &&
+            !appState.uiState.buzzMenuState.visible
+        ) {
+            event.preventDefault();
+        }
+    };
+    document.addEventListener("keydown", preventSpaceScrollListener);
+
     return () => {
         document.removeEventListener("keyup", keydownListener);
+        document.removeEventListener("keydown", buzzPointPlacementKeyListener, /* useCapture */ true);
+        document.removeEventListener("keydown", playerShortcutKeyListener, /* useCapture */ true);
+        document.removeEventListener("keydown", preventSpaceScrollListener);
+        isDisposed = true;
+        disposeViewSettingsReaction?.();
     };
 }
 
+// Whether the event targets a text-entry control, where keys (notably Space) should be typed rather than treated
+// as moderator shortcuts.
+function isTextEntryElement(target: EventTarget | null): boolean {
+    const element: HTMLElement | null = target as HTMLElement | null;
+    if (element == null || element.tagName == undefined) {
+        return false;
+    }
+
+    const tagName: string = element.tagName;
+    return tagName === "INPUT" || tagName === "TEXTAREA" || element.isContentEditable === true;
+}
+
+// The keyup of a key whose keydown was already handled as a player shortcut, so it isn't handled twice
+let handledPlayerShortcutCode: string | undefined;
+
+// 1-8 mark the player at that position (the player pad's order) correct; Shift+1-8 mark them wrong. They act while
+// the tossup is live or the player pad is open; once a tossup is answered, the numbers toggle bonus parts instead.
+function playerShortcutHandler(event: KeyboardEvent, appState: AppState): void {
+    const uiState: UIState = appState.uiState;
+    if (
+        uiState.dialogState.visibleDialog !== ModalVisibilityStatus.None ||
+        uiState.buzzMenuState.visible ||
+        isTextEntryElement(event.target) ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey
+    ) {
+        return;
+    }
+
+    // Use the physical key, since Shift changes event.key ("1" becomes "!")
+    const match: RegExpExecArray | null = /^(?:Digit|Numpad)([1-8])$/.exec(event.code);
+    const cycle: Cycle | undefined = appState.activeGame.cycles[uiState.cycleIndex];
+    if (
+        match == null ||
+        cycle == undefined ||
+        (cycle.correctBuzz != undefined && uiState.buzzPointPlacement == undefined)
+    ) {
+        return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) {
+        return;
+    }
+
+    handledPlayerShortcutCode = event.code;
+    TossupQuestionController.recordPlayerPadBuzz(appState, Number(match[1]) - 1, /* isCorrect */ !event.shiftKey);
+}
+
+// While the player pad is open, Escape closes it. The arrow keys move the buzz point through the question's
+// FocusZone, which has focus on the buzz point's word (see TossupQuestion); if focus has wandered off the question
+// (say, to the pad), an arrow key puts it back on that word first.
+function buzzPointPlacementShortcutHandler(event: KeyboardEvent, appState: AppState): void {
+    if (
+        appState.uiState.buzzPointPlacement == undefined ||
+        appState.uiState.buzzMenuState.visible ||
+        appState.uiState.dialogState.visibleDialog !== ModalVisibilityStatus.None ||
+        isTextEntryElement(event.target)
+    ) {
+        return;
+    }
+
+    switch (event.key) {
+        case "ArrowLeft":
+        case "ArrowRight":
+        case "ArrowUp":
+        case "ArrowDown": {
+            const focusedElement: Element | null = document.activeElement;
+            if (focusedElement != null && focusedElement.matches(".tossup span[data-index]")) {
+                // The FocusZone moves it
+                return;
+            }
+
+            document
+                .querySelector<HTMLElement>(`.tossup span[data-index="${appState.uiState.selectedWordIndex}"]`)
+                ?.focus();
+            break;
+        }
+        case "Escape":
+            TossupQuestionController.cancelBuzzPointPlacement(appState);
+            break;
+        default:
+            return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+}
+
 function shortcutHandler(event: KeyboardEvent, appState: AppState): void {
+    // This key's keydown was a player shortcut (playerShortcutHandler); don't treat its keyup as another shortcut
+    if (handledPlayerShortcutCode != undefined && event.code === handledPlayerShortcutCode) {
+        handledPlayerShortcutCode = undefined;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+    }
+
     // Disable shortcuts if there's a modal dialog open
     if (appState.uiState.dialogState.visibleDialog !== ModalVisibilityStatus.None) {
         return;
     }
 
+    // Don't hijack keys while the user is typing in a text field (notably Space, the buzz shortcut)
+    if (isTextEntryElement(event.target)) {
+        return;
+    }
+
+    // While the buzz menu is open it handles the keyboard
+    if (appState.uiState.buzzMenuState.visible) {
+        return;
+    }
+
     switch (event.key.toUpperCase()) {
         case "E":
-            // Go to the end of a tossup and open up the buzz menu.
-            const tossup: Tossup | undefined = appState.game.getTossup(appState.uiState.cycleIndex);
-            if (tossup) {
-                // Issue is that this removes parens, so we don't have all the info we need
-                const words: ITossupWord[] = tossup.getWords(appState.game.gameFormat);
-                const index: number = words.filter((word) => word.canBuzzOn).length - 1;
+            // Open the player pad at the end of the tossup
+            TossupQuestionController.placeBuzzPointAtEnd(appState);
+            event.preventDefault();
+            event.stopPropagation();
+            break;
 
-                appState.uiState.setSelectedWordIndex(index);
-                appState.uiState.showBuzzMenu(/* clearSelectedWordOnClose */ false);
-
-                // An alternate approach, if we want to keep keyboard focus there. For now users would probably just
-                // keep pressing E, and this way looks uglier (flash of focus, keeps focus after the buzzer is selected)
-                // This requires adding the class "word" to the span in QuestionWord.tsx
-                // // const index: number = words.length - 1;
-                // // const wordElement = document.getElementsByClassName("word").item(index) as HTMLSpanElement;
-                // // if (wordElement) {
-                // //     wordElement.focus();
-                // //     wordElement.click();
-                // // }
-            }
+        case " ":
+            // Space is the buzz shortcut: it marks the buzz point (where the reader is, when the microphone is
+            // tracking them) and opens the player pad there
+            TossupQuestionController.handleBuzzShortcut(appState);
 
             event.preventDefault();
             event.stopPropagation();
-
             break;
 
         case "N":
-            if (appState.uiState.cycleIndex + 1 < appState.game.playableCycles.length) {
+            if (appState.uiState.cycleIndex + 1 < appState.activeGame.playableCycles.length) {
                 appState.uiState.nextCycle();
             }
             event.preventDefault();
@@ -309,7 +533,7 @@ function shortcutHandler(event: KeyboardEvent, appState: AppState): void {
             // This shortcut is only supported when bouncebacks are disabled. We could add support for it later and just
             // toggle through all the fields, but the logic is slightly more complicated and very few formats use
             // bouncebacks.
-            if (appState.game.gameFormat.bonusesBounceBack) {
+            if (appState.activeGame.gameFormat.bonusesBounceBack) {
                 event.preventDefault();
                 event.stopPropagation();
 
@@ -319,8 +543,8 @@ function shortcutHandler(event: KeyboardEvent, appState: AppState): void {
             // If there are bonuses and they are active, toggle the bonus part. We have to do some defensive checks to
             // make sure that we can update the bonus
             const cycleIndex: number = appState.uiState.cycleIndex;
-            const cycle: Cycle = appState.game.cycles[cycleIndex];
-            const bonus: Bonus | undefined = appState.game.getBonus(cycleIndex);
+            const cycle: Cycle = appState.activeGame.cycles[cycleIndex];
+            const bonus: Bonus | undefined = appState.activeGame.getBonus(cycleIndex);
             if (cycle.correctBuzz == undefined || bonus == undefined) {
                 event.preventDefault();
                 event.stopPropagation();
@@ -384,6 +608,26 @@ function update(appState: AppState, props: IModaqControlProps): void {
 
     if (props.hideNewGame !== appState.uiState.hideNewGame) {
         appState.uiState.setHideNewGame(props.hideNewGame == true);
+    }
+
+    const nextHostSettings: IHostSettings | undefined = props.hostSettings;
+    const currentHostSettings = appState.uiState.hostSettings;
+    if (
+        (nextHostSettings?.promptBeforeExport ?? false) !== currentHostSettings.promptBeforeExport ||
+        (nextHostSettings?.onlyAllowQbjExport ?? false) !== currentHostSettings.onlyAllowQbjExport ||
+        (nextHostSettings?.restrictRosterChanges ?? false) !== currentHostSettings.restrictRosterChanges ||
+        (nextHostSettings?.disableChangeFormat ?? false) !== currentHostSettings.disableChangeFormat ||
+        nextHostSettings?.productName !== currentHostSettings.productName
+    ) {
+        appState.uiState.setHostSettings(nextHostSettings);
+    }
+
+    if (props.onFetchQuestionById !== appState.uiState.onFetchQuestionById) {
+        appState.uiState.setOnFetchQuestionById(props.onFetchQuestionById);
+    }
+
+    if (props.onViewSettingsChange !== appState.uiState.onViewSettingsChange) {
+        appState.uiState.setOnViewSettingsChange(props.onViewSettingsChange);
     }
 
     if (props.packetName !== appState.uiState.packetFilename && props.packetName !== appState.game.packet.name) {

@@ -32,7 +32,7 @@ const addPlayerButtonStyle: Partial<IButtonStyles> = {
 // I looked into using a DetailsList instead of a List, so we could get rid of the Starter label on each checkbox, but
 // the column label is usually cut off, defeating the purpose
 export const ManualTeamEntry = observer(function ManualTeamEntry(props: IManualTeamEntryProps) {
-    const classes: ITeamEntryClassNames = getClassNames(props.playerListHeight);
+    const classes: ITeamEntryClassNames = getClassNames();
 
     const nameChangeHandler = React.useCallback(
         (ev?: React.FormEvent<HTMLInputElement | HTMLTextAreaElement>, newName?: string) => {
@@ -67,7 +67,11 @@ export const ManualTeamEntry = observer(function ManualTeamEntry(props: IManualT
 
     // Use a focus zone so that we only tab to a team entry instead of everything tabbable within the team entry
     return (
-        <FocusZone direction={FocusZoneDirection.vertical} className={classes.teamEntry} onKeyDown={focusZoneKeyDown}>
+        <FocusZone
+            direction={FocusZoneDirection.vertical}
+            className={props.className == undefined ? classes.teamEntry : `${classes.teamEntry} ${props.className}`}
+            onKeyDown={focusZoneKeyDown}
+        >
             <TextField
                 className={teamEntryClassName}
                 label={props.teamLabel}
@@ -245,16 +249,15 @@ function focusOnFirstInputInPlayerEntry(playerEntryElement: HTMLElement): void {
     playerEntryElement.getElementsByTagName("input")[0].focus();
 }
 
-const getClassNames = (playerListHeight: number | string): ITeamEntryClassNames =>
+const getClassNames = (): ITeamEntryClassNames =>
     mergeStyleSets({
         addButtonContainer: {
             display: "flex",
             justifyContent: "center",
         },
+        // The whole dialog scrolls when needed, so this list isn't separately scrollable
         playerListContainer: {
-            height: playerListHeight,
             marginBottom: 10,
-            overflowY: "auto",
         },
         teamEntry: {
             display: "flex",
@@ -264,8 +267,8 @@ const getClassNames = (playerListHeight: number | string): ITeamEntryClassNames 
     });
 
 export interface IManualTeamEntryProps {
+    className?: string;
     defaultTeamName: string;
-    playerListHeight: string | number;
     players: Player[];
     teamLabel: string;
     teamNameErrorMessage?: string;

@@ -5,13 +5,13 @@ import { mergeStyleSets } from "@fluentui/react";
 import { CycleChooser } from "./CycleChooser";
 import { QuestionViewer } from "./QuestionViewer";
 import { AppState } from "../state/AppState";
-import { StateContext } from "../contexts/StateContext";
+import { useAppState } from "../contexts/StateContext";
 
 export const QuestionViewerContainer = observer(function QuestionViewerContainer() {
-    const appState: AppState = React.useContext(StateContext);
+    const appState: AppState = useAppState();
     const classes: IQuestionViewerContainerClassNames = getClassNames();
 
-    if (!appState.game.isLoaded) {
+    if (!appState.activeGame.isLoaded) {
         return null;
     }
 

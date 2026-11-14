@@ -2,9 +2,8 @@ import { AppState } from "../../state/AppState";
 import { GameState } from "../../state/GameState";
 import { RenameTeamDialogState } from "../../state/RenameTeamDialogState";
 
-export function renameTeam(): void {
-    const appState: AppState = AppState.instance;
-    const game: GameState = appState.game;
+export function renameTeam(appState: AppState): void {
+    const game: GameState = appState.activeGame;
     const renameDialogState: RenameTeamDialogState | undefined = appState.uiState.dialogState.renameTeamDialog;
     if (renameDialogState == undefined) {
         return;
@@ -12,7 +11,7 @@ export function renameTeam(): void {
 
     renameDialogState.clearErrorMessage();
 
-    const errorMessage: string | undefined = validate();
+    const errorMessage: string | undefined = validate(appState);
     if (errorMessage != undefined) {
         renameDialogState.setErrorMessage(errorMessage);
         return;
@@ -25,11 +24,10 @@ export function renameTeam(): void {
         return;
     }
 
-    hideDialog();
+    hideDialog(appState);
 }
 
-export function changeNewName(newName: string): void {
-    const appState: AppState = AppState.instance;
+export function changeNewName(appState: AppState, newName: string): void {
     const renameTeamDialog: RenameTeamDialogState | undefined = appState.uiState.dialogState.renameTeamDialog;
     if (renameTeamDialog == undefined) {
         return;
@@ -38,8 +36,7 @@ export function changeNewName(newName: string): void {
     renameTeamDialog.setName(newName);
 }
 
-export function changeTeam(teamName: string): void {
-    const appState: AppState = AppState.instance;
+export function changeTeam(appState: AppState, teamName: string): void {
     const renameTeamDialog: RenameTeamDialogState | undefined = appState.uiState.dialogState.renameTeamDialog;
     if (renameTeamDialog == undefined) {
         return;
@@ -50,8 +47,7 @@ export function changeTeam(teamName: string): void {
     renameTeamDialog.setName(teamName);
 }
 
-export function validate(): string | undefined {
-    const appState: AppState = AppState.instance;
+export function validate(appState: AppState): string | undefined {
     const renameTeamDialog: RenameTeamDialogState | undefined = appState.uiState.dialogState.renameTeamDialog;
     if (renameTeamDialog == undefined) {
         return "Dialog is closed";
@@ -66,14 +62,13 @@ export function validate(): string | undefined {
         return "Name cannot be blank";
     }
 
-    if (appState.game.teamNames.indexOf(renameTeamDialog.newName) >= 0) {
+    if (appState.activeGame.teamNames.indexOf(renameTeamDialog.newName) >= 0) {
         return "Team name already exists";
     }
 
     return undefined;
 }
 
-export function hideDialog(): void {
-    const appState: AppState = AppState.instance;
+export function hideDialog(appState: AppState): void {
     appState.uiState.dialogState.hideRenameTeamDialog();
 }

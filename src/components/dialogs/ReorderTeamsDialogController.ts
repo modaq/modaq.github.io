@@ -3,9 +3,8 @@
 import { Player } from "../../state/TeamState";
 import { AppState } from "../../state/AppState";
 
-export function submit(): void {
-    const appState: AppState = AppState.instance;
-    const players: Player[] = [...appState.game.players];
+export function submit(appState: AppState): void {
+    const players: Player[] = [...appState.activeGame.players];
     if (players.length < 2) {
         return;
     }
@@ -19,5 +18,5 @@ export function submit(): void {
     players[0] = players[otherPlayerIndex];
     players[otherPlayerIndex] = firstPlayer;
 
-    appState.game.setPlayers(players);
+    appState.activeGame.setPlayers(players);
 }

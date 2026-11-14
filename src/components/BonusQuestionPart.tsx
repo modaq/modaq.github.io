@@ -15,9 +15,9 @@ import { BonusPart } from "../state/PacketState";
 import { Cycle } from "../state/Cycle";
 import { Answer } from "./Answer";
 import { FormattedText } from "./FormattedText";
-import { IFormattedText } from "../parser/IFormattedText";
+import type { IFormattedText } from "../parser/IFormattedText";
 import { IGameFormat } from "../state/IGameFormat";
-import { StateContext } from "../contexts/StateContext";
+import { useAppState } from "../contexts/StateContext";
 import { AppState } from "../state/AppState";
 
 const bouncebackCorrectnessStyles: Partial<IDropdownStyles> = {
@@ -30,7 +30,7 @@ const bouncebackCorrectnessStyles: Partial<IDropdownStyles> = {
 };
 
 export const BonusQuestionPart = observer(function BonusQuestionPart(props: IBonusQuestionPartProps) {
-    const appState: AppState = React.useContext(StateContext);
+    const appState: AppState = useAppState();
     const onCheckboxChangeHandler = React.useCallback((ev, checked) => onCorrectChange(props, ev, checked), [props]);
     const onDropdownChangeHandler = React.useCallback((ev, option) => onTeamAnswerChange(props, ev, option), [props]);
 
@@ -101,7 +101,7 @@ export const BonusQuestionPart = observer(function BonusQuestionPart(props: IBon
                 );
 
                 return (
-                    <div className={classes.bonusPartContainer}>
+                    <div className={`${classes.bonusPartContainer} bonus-part-${props.partNumber}`}>
                         <div className={classes.bonusPartQuestionText}>
                             {correctnessMarker}
                             <span>

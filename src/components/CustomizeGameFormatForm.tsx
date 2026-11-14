@@ -15,7 +15,7 @@ import * as CustomizeGameFormatFormController from "./CustomizeGameFormatFormCon
 import { AppState } from "../state/AppState";
 import { IGameFormat } from "../state/IGameFormat";
 import { CustomizeGameFormatState } from "../state/CustomizeGameFormatState";
-import { StateContext } from "../contexts/StateContext";
+import { useAppState } from "../contexts/StateContext";
 import { GameFormatPicker } from "./GameFormatPicker";
 import { SheetType } from "../state/SheetState";
 
@@ -30,7 +30,7 @@ const settingsStackTokens: Partial<IStackTokens> = { childrenGap: 10 };
 export const CustomizeGameFormatForm = observer(function CustomizeGameFormatDialogBody(
     props: ICustomizeGameFormatFormProps
 ): JSX.Element {
-    const appState: AppState = React.useContext(StateContext);
+    const appState: AppState = useAppState();
     const customizeGameFormatState: CustomizeGameFormatState | undefined = props.state;
 
     const resetGameFormat = React.useCallback(
@@ -44,6 +44,7 @@ export const CustomizeGameFormatForm = observer(function CustomizeGameFormatDial
 
     const gameFormat: IGameFormat | undefined = customizeGameFormatState.gameFormat;
     const settingsProps: ISettingProps = { appState, state: props.state, gameFormat };
+    const sheetType: SheetType = appState.uiState.sheetsState.getSheetTypeForExport();
 
     return (
         <Stack>
@@ -51,8 +52,7 @@ export const CustomizeGameFormatForm = observer(function CustomizeGameFormatDial
                 <GameFormatPicker
                     gameFormat={gameFormat}
                     exportFormatSupportsBouncebacks={
-                        appState.uiState.sheetsState.sheetType !== SheetType.UCSDSheets &&
-                        appState.uiState.sheetsState.sheetType !== SheetType.Lifsheets
+                        sheetType !== SheetType.UCSDSheets && sheetType !== SheetType.Lifsheets
                     }
                     updateGameFormat={resetGameFormat}
                 />

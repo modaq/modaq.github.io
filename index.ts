@@ -5,6 +5,8 @@ import { IGameFormat as gameFormat } from "./src/state/IGameFormat";
 import { IBonus as bonus, IPacket as packet, ITossup as tossup } from "./src/state/IPacket";
 import { IPlayer as player } from "./src/state/TeamState";
 import { ModaqControl as control, IModaqControlProps as controlProps } from "./src/components/ModaqControl";
+import { IHostSettings as hostSettings } from "./src/state/IHostSettings";
+import { IViewSettings as viewSettings } from "./src/state/IViewSettings";
 import {
     IFormattingOptions as iFormattingOptions,
     parseFormattedText as ftpParseFormattedText,
@@ -17,6 +19,10 @@ import { IResult } from "./src/IResult";
 export const ModaqControl = control;
 
 export type IModaqControlProps = controlProps;
+
+export type IHostSettings = hostSettings;
+
+export type IViewSettings = viewSettings;
 
 export type IPacket = packet;
 

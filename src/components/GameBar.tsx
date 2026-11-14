@@ -12,30 +12,31 @@ import * as BonusQuestionController from "./BonusQuestionController";
 import * as ReorderTeamsDialogController from "./dialogs/ReorderTeamsDialogController";
 import * as TossupQuestionController from "./TossupQuestionController";
 import { GameState } from "../state/GameState";
-import { UIState } from "../state/UIState";
+import { buzzPointWordOffsets, UIState } from "../state/UIState";
 import { Cycle } from "../state/Cycle";
 import { Bonus, Tossup } from "../state/PacketState";
 import { Player } from "../state/TeamState";
 import { AppState } from "../state/AppState";
-import { ITossupAnswerEvent } from "../state/Events";
-import { StateContext } from "../contexts/StateContext";
+import { IBonusProtestEvent, ITossupAnswerEvent, ITossupProtestEvent } from "../state/Events";
+import { useAppState } from "../contexts/StateContext";
 import { StatusDisplayType } from "../state/StatusDisplayType";
+import { ReaderFollower } from "../speech/ReaderFollower";
 
 const overflowProps: IButtonProps = { ariaLabel: "More" };
 
 export const GameBar = observer(function GameBar(): JSX.Element {
     // This should pop up the new game handler
-    const appState: AppState = React.useContext(StateContext);
+    const appState: AppState = useAppState();
     const uiState: UIState = appState.uiState;
-    const game: GameState = appState.game;
-
+    const game: GameState = appState.activeGame;
     const newGameHandler = React.useCallback(() => {
         if (appState.game.hasUpdates) {
             // Prompt the user
-            uiState.dialogState.showYesNoCancelMessageDialog(
-                "Export Game?",
-                "The game has changes that haven't been exported. Would you like to export the game before starting a new one?",
-                () => {
+            uiState.dialogState.showYesNoCancelMessageDialog({
+                title: "Export Game?",
+                message:
+                    "The game has changes that haven't been exported. Would you like to export the game before starting a new one?",
+                onYes: () => {
                     // Open the export dialog, depending on if they have sheets. We should ideally abstract this logic
                     // to another method
                     if (appState.uiState.customExportOptions != undefined) {
@@ -47,13 +48,13 @@ export const GameBar = observer(function GameBar(): JSX.Element {
                         appState.uiState.dialogState.showExportToJsonDialog();
                     }
                 },
-                () => {
+                onNo: () => {
                     // User doesn't want any updates, so clear them
                     appState.game.markUpdateComplete();
                     uiState.createPendingNewGame();
                     uiState.dialogState.showNewGameDialog();
-                }
-            );
+                },
+            });
         } else {
             uiState.createPendingNewGame();
             uiState.dialogState.showNewGameDialog();
@@ -67,45 +68,27 @@ export const GameBar = observer(function GameBar(): JSX.Element {
         uiState.dialogState.showImportFromQBJDialog();
     }, [uiState]);
 
-    const protestBonusHandler = React.useCallback(() => {
-        // Issue: pending protest needs existing index. Need to update it to include the part number
-        const cycle: Cycle = game.cycles[uiState.cycleIndex];
-        if (cycle?.bonusAnswer == undefined) {
-            return;
-        }
-
-        const bonusIndex: number = game.getBonusIndex(uiState.cycleIndex);
-        const bonus: Bonus | undefined = game.packet.bonuses[bonusIndex];
-        if (bonus == undefined) {
-            // Something is wrong... the bonus is undefined, but this handler can be accessed?
-            throw new Error(`Impossible to add bonus protest for bonus question ${bonusIndex}`);
-        }
-
-        const protestableParts: number[] = cycle.getProtestableBonusPartIndexes(bonus.parts.length);
-        uiState.setPendingBonusProtest(cycle.bonusAnswer.receivingTeamName, bonusIndex, protestableParts[0]);
-    }, [game, uiState]);
-
     const addPlayerHandler = React.useCallback(() => {
-        uiState.createPendingNewPlayer(game.teamNames[0]);
+        uiState.dialogState.showAddPlayerDialog(game.teamNames[0]);
     }, [uiState, game]);
 
     const addQuestionsHandler = React.useCallback(() => {
         uiState.dialogState.showAddQuestionsDialog();
     }, [uiState]);
 
-    const openHelpHandler = React.useCallback(() => appState.uiState.dialogState.showHelpDialog(), [appState]);
+    const openHelpHandler = (): void => appState.uiState.dialogState.showHelpDialog();
 
     const reorderPlayersHandler = React.useCallback(() => {
         uiState.dialogState.showReorderPlayersDialog(game.players);
     }, [uiState, game]);
 
     const reorderTeamsHandler = React.useCallback(() => {
-        uiState.dialogState.showOKCancelMessageDialog(
-            "Reorder teams",
-            "Swap the order of teams?",
-            ReorderTeamsDialogController.submit
-        );
-    }, [uiState]);
+        uiState.dialogState.showOKCancelMessageDialog({
+            title: "Reorder teams",
+            message: "Swap the order of teams?",
+            onOK: () => ReorderTeamsDialogController.submit(appState),
+        });
+    }, [appState, uiState]);
 
     const renameTeamHandler = React.useCallback(() => {
         if (game.players.length === 0) {
@@ -118,45 +101,47 @@ export const GameBar = observer(function GameBar(): JSX.Element {
     const items: ICommandBarItemProps[] = appState.uiState.hideNewGame
         ? []
         : [
-              {
-                  key: "newGame",
-                  text: "New game",
-                  iconProps: { iconName: "Add" },
-                  split: true,
-                  subMenuProps: {
-                      items: [
-                          {
-                              key: "newGameSubMenuItem",
-                              text: "New game...",
-                              iconProps: { iconName: "Add" },
-                              onClick: newGameHandler,
-                          },
-                          {
-                              key: "importQBJ",
-                              text: "Import from QBJ...",
-                              iconProps: { iconName: "Download" },
-                              onClick: importFromQBJHandler,
-                          },
-                          {
-                              key: "importGame",
-                              text: "Import raw game...",
-                              iconProps: { iconName: "Download" },
-                              onClick: importGameHandler,
-                          },
-                      ],
-                  },
-                  onClick: newGameHandler,
-              },
-          ];
+            {
+                key: "newGame",
+                text: "New game",
+                iconProps: { iconName: "Add" },
+                split: true,
+                subMenuProps: {
+                    items: [
+                        {
+                            key: "newGameSubMenuItem",
+                            text: "New game...",
+                            iconProps: { iconName: "Add" },
+                            onClick: newGameHandler,
+                        },
+                        {
+                            key: "importQBJ",
+                            text: "Import from QBJ...",
+                            iconProps: { iconName: "Download" },
+                            onClick: importFromQBJHandler,
+                        },
+                        {
+                            key: "importGame",
+                            text: "Import raw game...",
+                            iconProps: { iconName: "Download" },
+                            onClick: importGameHandler,
+                        },
+                    ],
+                },
+                onClick: newGameHandler,
+            },
+        ];
 
     const optionsSubMenuItems: ICommandBarItemProps[] = getOptionsSubMenuItems(appState);
-    items.push({
-        key: "options",
-        text: "Options",
-        subMenuProps: {
-            items: optionsSubMenuItems,
-        },
-    });
+    if (optionsSubMenuItems.length > 0) {
+        items.push({
+            key: "options",
+            text: "Options",
+            subMenuProps: {
+                items: optionsSubMenuItems,
+            },
+        });
+    }
 
     const viewSubMenuItems: ICommandBarItemProps[] = getViewSubMenuItems(appState);
     items.push({
@@ -171,7 +156,6 @@ export const GameBar = observer(function GameBar(): JSX.Element {
     const actionSubMenuItems: ICommandBarItemProps[] = getActionSubMenuItems(
         appState,
         addPlayerHandler,
-        protestBonusHandler,
         reorderPlayersHandler,
         reorderTeamsHandler,
         renameTeamHandler,
@@ -185,8 +169,23 @@ export const GameBar = observer(function GameBar(): JSX.Element {
         },
     });
 
-    // If a custom export option is given, only show a button for that export
-    if (appState.uiState.customExportOptions == undefined) {
+    // In TMS-managed mode, only show a button for exporting a backup, gated behind a confirmation dialog.
+    // Otherwise show the custom export button (if given) or the standard export submenu.
+    if (uiState.hostSettings.promptBeforeExport) {
+        items.push({
+            key: "exportBackup",
+            text: "Export Backup",
+            disabled: appState.game.cycles.length === 0,
+            onClick: () => {
+                uiState.dialogState.showOKCancelMessageDialog({
+                    title: "Export Backup",
+                    message: `This function is intended for downloading a backup file for an emergency migration to MODAQ outside of ${uiState.hostSettings.productName ?? "the host application"}. Are you sure you want to proceed?`,
+                    onOK: () => uiState.dialogState.showExportToJsonDialog(),
+                    okLabel: "Yes, Export Backup",
+                });
+            },
+        });
+    } else if (appState.uiState.customExportOptions == undefined) {
         const exportSubMenuItems: ICommandBarItemProps[] = getExportSubMenuItems(appState);
         items.push({
             key: "export",
@@ -234,7 +233,7 @@ export const GameBar = observer(function GameBar(): JSX.Element {
         onClick: openHelpHandler,
     });
 
-    return <CommandBar items={items} overflowButtonProps={overflowProps} />;
+    return <CommandBar className="game-bar" items={items} overflowButtonProps={overflowProps} />;
 });
 
 async function exportToSheets(appState: AppState): Promise<void> {
@@ -245,7 +244,6 @@ async function exportToSheets(appState: AppState): Promise<void> {
 function getActionSubMenuItems(
     appState: AppState,
     addPlayerHandler: () => void,
-    protestBonusHandler: () => void,
     reorderPlayersHandler: () => void,
     reorderTeamsHandler: () => void,
     renameTeamHandler: () => void,
@@ -253,7 +251,7 @@ function getActionSubMenuItems(
 ): ICommandBarItemProps[] {
     const items: ICommandBarItemProps[] = [];
     const uiState: UIState = appState.uiState;
-    const game: GameState = appState.game;
+    const game: GameState = appState.activeGame;
 
     const playerManagementSection: ICommandBarItemProps = getPlayerManagementSubMenuItems(
         appState,
@@ -266,7 +264,7 @@ function getActionSubMenuItems(
     );
     items.push(playerManagementSection);
 
-    const protestsSection: ICommandBarItemProps = getProtestSubMenuItems(appState, game, uiState, protestBonusHandler);
+    const protestsSection: ICommandBarItemProps = getProtestSubMenuItems(appState, game, uiState);
     items.push(protestsSection);
 
     const removeQuestionSection: ICommandBarItemProps = {
@@ -281,20 +279,22 @@ function getActionSubMenuItems(
                     text: "Throw out tossup",
                     onClick: () =>
                         TossupQuestionController.throwOutTossup(
-                            appState.game.cycles[appState.uiState.cycleIndex],
-                            appState.game.getTossupIndex(appState.uiState.cycleIndex) + 1
+                            appState,
+                            appState.activeGame.cycles[appState.uiState.cycleIndex],
+                            appState.activeGame.getTossupIndex(appState.uiState.cycleIndex) + 1
                         ),
-                    disabled: appState.game.cycles.length === 0,
+                    disabled: appState.activeGame.cycles.length === 0,
                 },
                 {
                     key: "removeBonus",
                     text: "Throw out bonus",
                     onClick: () =>
                         BonusQuestionController.throwOutBonus(
-                            appState.game.cycles[appState.uiState.cycleIndex],
-                            appState.game.getBonusIndex(appState.uiState.cycleIndex)
+                            appState,
+                            appState.activeGame.cycles[appState.uiState.cycleIndex],
+                            appState.activeGame.getBonusIndex(appState.uiState.cycleIndex)
                         ),
-                    disabled: appState.game.cycles.length === 0,
+                    disabled: appState.activeGame.cycles.length === 0,
                 },
             ],
         },
@@ -312,7 +312,7 @@ function getActionSubMenuItems(
                     key: "addMoreQuestions",
                     text: "Add questions...",
                     onClick: addQuestionsHandler,
-                    disabled: appState.game.cycles.length === 0,
+                    disabled: appState.activeGame.cycles.length === 0,
                 },
             ],
         },
@@ -350,6 +350,12 @@ function getExportSubMenuItems(appState: AppState): ICommandBarItemProps[] {
 function getOptionsSubMenuItems(appState: AppState): ICommandBarItemProps[] {
     const items: ICommandBarItemProps[] = [];
 
+    // Changing the game format isn't applicable in TMS-managed mode, where the format is set in TMS. Font moves
+    // to the View menu in that case, so Options would otherwise be left with a single, oddly-scoped item.
+    if (appState.uiState.hostSettings.disableChangeFormat) {
+        return items;
+    }
+
     items.push(
         {
             key: "changeFormat",
@@ -364,6 +370,116 @@ function getOptionsSubMenuItems(appState: AppState): ICommandBarItemProps[] {
             onClick: () => {
                 appState.uiState.showFontDialog();
             },
+        },
+        {
+            key: "trackReader",
+            text: "Follow reading with microphone",
+            title:
+                "Listen to the microphone and move the buzz point to where the reader is in the tossup. In Chrome and Edge, the browser may send the audio to an online speech service.",
+            canCheck: true,
+            checked: appState.uiState.trackReaderWithMicrophone,
+            onClick: () => {
+                if (!appState.uiState.trackReaderWithMicrophone && !ReaderFollower.isSupported()) {
+                    appState.uiState.dialogState.showOKMessageDialog({
+                        title: "Microphone Tracking Unavailable",
+                        message:
+                            "Neither speech recognition nor microphone capture is supported in this browser. Try a recent version of Chrome, Edge, or Firefox.",
+                    });
+                    return;
+                }
+
+                if (appState.uiState.trackReaderWithMicrophone) {
+                    appState.uiState.setTrackReaderWithMicrophone(false);
+                    return;
+                }
+
+                // Browser speech recognition (Chrome, Edge, Safari) can send the audio to the browser vendor's
+                // servers, so say so before turning it on the first time. Local recognition (Vosk) doesn't need it.
+                if (!appState.uiState.hasAcceptedSpeechPrivacyNotice && ReaderFollower.mayOfferFasterModel()) {
+                    appState.uiState.dialogState.showOKCancelMessageDialog({
+                        title: "Follow Reading with Microphone",
+                        message:
+                            "MODAQ will listen to the microphone while tossups are read. Your browser's speech recognition may send that audio to an online service run by the browser maker (such as Google or Microsoft) to turn it into text, unless an on-device model is installed. MODAQ itself doesn't save or upload the audio. Turn on microphone tracking?",
+                        okLabel: "Turn on",
+                        onOK: () => {
+                            appState.uiState.acceptSpeechPrivacyNotice();
+                            appState.uiState.setTrackReaderWithMicrophone(true);
+                        },
+                    });
+                    return;
+                }
+
+                appState.uiState.setTrackReaderWithMicrophone(true);
+            },
+        },
+        {
+            key: "showReaderPosition",
+            text: "Show reader position while reading",
+            title: "In microphone mode, highlight where the reader is as they read. Otherwise it's only shown when you press Space.",
+            canCheck: true,
+            checked: appState.uiState.showReaderPositionWhileReading,
+            disabled: !appState.uiState.trackReaderWithMicrophone,
+            onClick: () => appState.uiState.toggleShowReaderPositionWhileReading(),
+        },
+        {
+            key: "instantReaderHighlight",
+            text: "Move highlight instantly (no delay)",
+            title: "When showing the reader position while reading, move it immediately instead of waiting for a pause",
+            canCheck: true,
+            checked: appState.uiState.instantReaderHighlight,
+            disabled:
+                !appState.uiState.trackReaderWithMicrophone || !appState.uiState.showReaderPositionWhileReading,
+            onClick: () => appState.uiState.toggleInstantReaderHighlight(),
+        },
+        ...(ReaderFollower.mayOfferFasterModel()
+            ? [
+                  {
+                      key: "installSpeechModel",
+                      text: "Download on-device speech model (lower latency)",
+                      title: "Recognize speech on this computer instead of an online service, which responds faster",
+                      onClick: () => {
+                          void ReaderFollower.installFasterModel().then((result) => {
+                              if (result === "installed") {
+                                  appState.uiState.restartReaderFollower();
+                              }
+
+                              appState.uiState.dialogState.showOKMessageDialog({
+                                  title: "On-device Speech Model",
+                                  message:
+                                      result === "installed"
+                                          ? "The on-device speech model is installed and will be used for microphone tracking. The debug info shows \"Listening (on-device)\" when it's in use."
+                                          : result === "unsupported"
+                                          ? "This browser doesn't offer an on-device speech model, so microphone tracking uses its online speech service. Chrome 139 or later offers one on some platforms."
+                                          : "The browser couldn't install an on-device speech model for this language. Microphone tracking will keep using the online speech service.",
+                              });
+                          });
+                      },
+                  },
+              ]
+            : []),
+        {
+            key: "buzzPointOffset",
+            text: "Buzz point offset (Space)",
+            title: "When you press Space, offset the buzz point this many words from where the reader is detected",
+            disabled: !appState.uiState.trackReaderWithMicrophone,
+            subMenuProps: {
+                items: buzzPointWordOffsets.map((offset) => ({
+                    key: `buzzPointOffset_${offset}`,
+                    text: offset === 0 ? "No offset" : `${offset > 0 ? "+" : ""}${offset} words`,
+                    canCheck: true,
+                    checked: appState.uiState.buzzPointWordOffset === offset,
+                    onClick: () => appState.uiState.setBuzzPointWordOffset(offset),
+                })),
+            },
+        },
+        {
+            key: "trackReaderDebug",
+            text: "Microphone debug info",
+            title: "Show diagnostics for microphone tracking under the tossup",
+            canCheck: true,
+            checked: appState.uiState.showReaderFollowerDebug,
+            disabled: !appState.uiState.trackReaderWithMicrophone,
+            onClick: () => appState.uiState.toggleReaderFollowerDebug(),
         }
     );
 
@@ -399,6 +515,14 @@ function getViewSubMenuItems(appState: AppState): ICommandBarItemProps[] {
             canCheck: true,
             checked: !appState.uiState.hideBonusOnDeadTossup,
             onClick: () => appState.uiState.toggleHideBonusOnDeadTossup(),
+        },
+        {
+            key: "useBuzzMenu",
+            text: "Use buzz menu instead of player pad",
+            title: "Record buzzes with the dropdown menu on the word instead of the floating player pad",
+            canCheck: true,
+            checked: appState.uiState.useBuzzMenu,
+            onClick: () => appState.uiState.toggleUseBuzzMenu(),
         },
     ];
 
@@ -443,6 +567,22 @@ function getViewSubMenuItems(appState: AppState): ICommandBarItemProps[] {
         },
     ]);
 
+    if (appState.uiState.hostSettings.disableChangeFormat) {
+        items = items.concat([
+            {
+                key: "viewDividerFont",
+                itemType: ContextualMenuItemType.Divider,
+            },
+            {
+                key: "font",
+                text: "Font...",
+                onClick: () => {
+                    appState.uiState.showFontDialog();
+                },
+            },
+        ]);
+    }
+
     items = items.concat([
         {
             key: "viewDivider2",
@@ -451,7 +591,7 @@ function getViewSubMenuItems(appState: AppState): ICommandBarItemProps[] {
         {
             key: "scoresheet",
             text: "Scoresheet...",
-            disabled: appState.game.cycles.length === 0,
+            disabled: appState.activeGame.cycles.length === 0,
             onClick: () => {
                 appState.uiState.dialogState.showScoresheetDialog();
             },
@@ -537,9 +677,14 @@ function getPlayerManagementSubMenuItems(
                 // TODO: should this be styled in a different color?
             };
 
-            const items: ICommandBarItemProps[] = isActivePlayer
-                ? [subMenuSectionItem, changeActivityItem, renameItem]
-                : [changeActivityItem, renameItem];
+            // Renaming players isn't applicable in TMS-managed mode, where players are managed in TMS.
+            const items: ICommandBarItemProps[] = uiState.hostSettings.restrictRosterChanges
+                ? isActivePlayer
+                    ? [subMenuSectionItem, changeActivityItem]
+                    : [changeActivityItem]
+                : isActivePlayer
+                    ? [subMenuSectionItem, changeActivityItem, renameItem]
+                    : [changeActivityItem, renameItem];
 
             activePlayerMenuItems.push({
                 key: `active_${teamName}_${player.name}`,
@@ -580,7 +725,7 @@ function getPlayerManagementSubMenuItems(
     //       existing action (sub vs join)
     //     - Should there be a color code for active players?
 
-    const gameMenuItemsDisabled: boolean = appState.game.cycles.length === 0;
+    const gameMenuItemsDisabled: boolean = appState.activeGame.cycles.length === 0;
 
     const addPlayerItem: ICommandBarItemProps = {
         key: "addNewPlayer",
@@ -610,23 +755,23 @@ function getPlayerManagementSubMenuItems(
         disabled: gameMenuItemsDisabled,
     };
 
+    // Add Player and Rename Team aren't applicable in TMS-managed mode, where rosters/teams are managed in TMS.
+    const teamManagementItems: ICommandBarItemProps[] = uiState.hostSettings.restrictRosterChanges
+        ? [playerActionsItem, reorderPlayersItem, reorderTeamsItem]
+        : [playerActionsItem, addPlayerItem, reorderPlayersItem, reorderTeamsItem, renameTeamItem];
+
     return {
         key: "teamManagement",
         itemType: ContextualMenuItemType.Section,
         sectionProps: {
             bottomDivider: true,
             title: "Team Management",
-            items: [playerActionsItem, addPlayerItem, reorderPlayersItem, reorderTeamsItem, renameTeamItem],
+            items: teamManagementItems,
         },
     };
 }
 
-function getProtestSubMenuItems(
-    appState: AppState,
-    game: GameState,
-    uiState: UIState,
-    protestBonusHandler: () => void
-): ICommandBarItemProps {
+function getProtestSubMenuItems(appState: AppState, game: GameState, uiState: UIState): ICommandBarItemProps {
     const cycle: Cycle | undefined =
         uiState.cycleIndex < game.cycles.length ? game.cycles[uiState.cycleIndex] : undefined;
 
@@ -636,7 +781,7 @@ function getProtestSubMenuItems(
     if (cycle?.orderedBuzzes != undefined) {
         const tossupIndex: number = game.getTossupIndex(uiState.cycleIndex);
         if (tossupIndex !== -1) {
-            const protestSubMenuItems: ICommandBarItemProps[] = [];
+            const tossupProtestSubMenuItems: ICommandBarItemProps[] = [];
             for (const buzz of cycle.orderedBuzzes) {
                 const { name, teamName } = buzz.marker.player;
                 const tossupProtestItemData: ITossupProtestMenuItemData = {
@@ -644,7 +789,7 @@ function getProtestSubMenuItems(
                     buzz,
                 };
 
-                const protestExists: boolean =
+                const tossupProtestExists: boolean =
                     cycle.tossupProtests != undefined &&
                     cycle.tossupProtests.findIndex((protest) => protest.teamName === teamName) >= 0;
 
@@ -652,12 +797,12 @@ function getProtestSubMenuItems(
                     key: `protest${teamName}_${name}`,
                     text: `${name} (${teamName})`,
                     canCheck: true,
-                    checked: protestExists,
+                    checked: tossupProtestExists,
                     data: tossupProtestItemData,
                     onClick: onProtestTossupClick,
                 };
 
-                const protestSection: ICommandBarItemProps = {
+                const tossupProtestSection: ICommandBarItemProps = {
                     key: `protestSection${teamName}_${name}`,
                     itemType: ContextualMenuItemType.Section,
                     sectionProps: {
@@ -667,16 +812,16 @@ function getProtestSubMenuItems(
                     },
                 };
 
-                protestSubMenuItems.push(protestSection);
+                tossupProtestSubMenuItems.push(tossupProtestSection);
             }
 
             protestTossupItems = {
                 key: "protestTossup",
                 text: "Protest tossup...",
                 subMenuProps: {
-                    items: protestSubMenuItems,
+                    items: tossupProtestSubMenuItems,
                 },
-                disabled: protestSubMenuItems.length === 0,
+                disabled: tossupProtestSubMenuItems.length === 0,
             };
         }
     }
@@ -685,15 +830,100 @@ function getProtestSubMenuItems(
         const bonusIndex: number = game.getBonusIndex(uiState.cycleIndex);
         if (bonusIndex !== -1) {
             const bonus: Bonus = game.packet.bonuses[bonusIndex];
-            if (cycle.getProtestableBonusPartIndexes(bonus.parts.length).length > 0) {
+            const protestableParts: number[] = cycle.getProtestableBonusPartIndexes(bonus.parts.length);
+            if (bonus && bonus.parts.length > 0) {
+                const bonusProtestSubMenuItems: ICommandBarItemProps[] = [];
+                for (let i = 0; i < bonus.parts.length; i++) {
+                    // This is potentially quadratic, but bonus parts should be few in number
+                    const bonusProtestExists = !protestableParts.includes(i);
+
+                    const protestBonusPartHandler = () => {
+                        // Somehow a bonus disappeared or the bonus answer did when handled. It should never happen
+                        if (bonus == undefined || cycle.bonusAnswer == undefined) {
+                            throw new Error(
+                                `Impossible to add bonus protest for bonus question ${bonusIndex}, part ${i + 1}`
+                            );
+                        }
+
+                        if (bonusProtestExists) {
+                            appState.uiState.showRemoveBonusProtestDialog(cycle, i);
+                            return;
+                        }
+
+                        uiState.setPendingBonusProtest(cycle.bonusAnswer.receivingTeamName, bonusIndex, i);
+                    };
+
+                    const bonusProtestItem: ICommandBarItemProps = {
+                        key: `protestBonusPart_${i}`,
+                        text: `${i + 1}`,
+                        canCheck: true,
+                        checked: bonusProtestExists,
+                        data: {
+                            appState,
+                            bonus: bonus,
+                            partIndex: i,
+                        },
+                        onClick: protestBonusPartHandler,
+                    };
+                    bonusProtestSubMenuItems.push(bonusProtestItem);
+                }
+
+                const bonusProtestSection: ICommandBarItemProps = {
+                    key: "bonusProtestSection",
+                    itemType: ContextualMenuItemType.Section,
+                    sectionProps: {
+                        bottomDivider: true,
+                        title: "Parts",
+                        items: bonusProtestSubMenuItems,
+                    },
+                };
+
                 protestBonusItem = {
                     key: "protestBonus",
                     text: "Protest bonus...",
-                    onClick: protestBonusHandler,
+                    subMenuProps: {
+                        items: [bonusProtestSection],
+                    },
                 };
             }
         }
     }
+
+    const copyProtestInfoSubItems: ICommandBarItemProps[] = [];
+    if (cycle?.tossupProtests != undefined) {
+        for (const protest of cycle.tossupProtests) {
+            copyProtestInfoSubItems.push({
+                key: `copyTossupProtest_${protest.teamName}`,
+                text: `${protest.teamName}'s buzz`,
+                onClick: () => {
+                    const protestInfo: string = buildCopyTossupProtestInfoText(appState, cycle, protest);
+                    copyProtestInfo(uiState, protestInfo);
+                },
+            });
+        }
+    }
+
+    if (cycle?.bonusProtests != undefined) {
+        for (const protest of cycle.bonusProtests) {
+            copyProtestInfoSubItems.push({
+                key: `copyBonusProtest_${protest.teamName}_${protest.partIndex}`,
+                text: `Bonus part ${protest.partIndex + 1}`,
+                onClick: () => {
+                    const protestInfo: string = buildCopyBonusProtestInfoText(appState, cycle, protest);
+                    copyProtestInfo(uiState, protestInfo);
+                },
+            });
+        }
+    }
+
+    const copyProtestInfoItem: ICommandBarItemProps = {
+        key: "copyProtestInfo",
+        text: "Copy protest info",
+        subMenuProps: {
+            items: copyProtestInfoSubItems,
+        },
+        disabled: copyProtestInfoSubItems.length === 0,
+    };
 
     if (protestTossupItems == undefined) {
         protestTossupItems = {
@@ -717,7 +947,7 @@ function getProtestSubMenuItems(
         sectionProps: {
             bottomDivider: true,
             title: "Protests",
-            items: [protestTossupItems, protestBonusItem],
+            items: [protestTossupItems, protestBonusItem, copyProtestInfoItem],
         },
     };
 }
@@ -733,7 +963,7 @@ function onPlayerEnterClick(
     }
 
     const appState: AppState = item.data.appState;
-    appState.game.addInactivePlayer(item.data.activePlayer, appState.uiState.cycleIndex);
+    appState.activeGame.addInactivePlayer(item.data.activePlayer, appState.uiState.cycleIndex);
 }
 
 function onProtestTossupClick(
@@ -746,7 +976,7 @@ function onProtestTossupClick(
         return;
     }
 
-    const { game, uiState } = item.data.appState;
+    const { activeGame: game, uiState } = item.data.appState;
 
     const cycle: Cycle = game.cycles[uiState.cycleIndex];
     if (cycle?.orderedBuzzes == undefined) {
@@ -757,7 +987,7 @@ function onProtestTossupClick(
 
     // If this item is checked, then clear the protest
     if (item.checked === true) {
-        cycle.removeTossupProtest(teamName);
+        uiState.showRemoveTossupProtestDialog(cycle, teamName);
         return;
     }
 
@@ -769,6 +999,74 @@ function onProtestTossupClick(
     }
 
     uiState.setPendingTossupProtest(teamName, tossupIndex, item.data.buzz.marker.position);
+}
+
+function buildCopyTossupProtestInfoText(appState: AppState, cycle: Cycle, protest: ITossupProtestEvent): string {
+    const game: GameState = appState.activeGame;
+    const uiState: UIState = appState.uiState;
+    const packetName: string = uiState.packetFilename != undefined ? `"${uiState.packetFilename}"` : "";
+
+    const tossup: Tossup = game.packet.tossups[protest.questionIndex];
+    return `* Packet ${packetName}
+* **Cycle**: #${uiState.cycleIndex + 1}
+* **Tossup**: #${protest.questionIndex + 1}
+* **Metadata**: ${tossup.metadata}
+* **Packet Answerline**: ${tossup.answer}
+* **Player Answer**: ${protest.givenAnswer}
+* **Buzzpoint**: Word #${protest.position} (${tossup
+            .getWords(game.gameFormat)
+            .filter((w) => w.canBuzzOn)
+        [protest.position].word.map((w) => w.text)
+            .join(" ")})
+* **Moderator Judgment**: ${cycle.correctBuzz == undefined || cycle.correctBuzz.marker.player.teamName !== protest.teamName
+            ? "Incorrect"
+            : "Correct"
+        }
+* **Justification**: ${protest.reason}`;
+}
+
+function buildCopyBonusProtestInfoText(appState: AppState, cycle: Cycle, protest: IBonusProtestEvent): string {
+    const game: GameState = appState.activeGame;
+    const uiState: UIState = appState.uiState;
+    const packetName: string = uiState.packetFilename != undefined ? `"${uiState.packetFilename}"` : "";
+    const bonus: Bonus = game.packet.bonuses[protest.questionIndex];
+
+    return `* Packet ${packetName}
+* **Cycle**: #${uiState.cycleIndex + 1}
+* **Bonus**: #${protest.questionIndex + 1}, Part #${protest.partIndex + 1}
+* **Metadata**: ${bonus.metadata}
+* **Packet Answerline**: ${bonus.parts[protest.partIndex].answer}
+* **Player Answer**: ${protest.givenAnswer}
+* **Moderator Judgment**: ${cycle.bonusAnswer === undefined || cycle.bonusAnswer.parts[protest.partIndex].points <= 0
+            ? "Incorrect"
+            : "Correct"
+        }
+* **Justification**: ${protest.reason}`;
+}
+
+function copyProtestInfo(uiState: UIState, protestInfo: string): void {
+    try {
+        navigator.clipboard
+            .writeText(protestInfo)
+            .then(() => onCopyProtestInfoSuccess(uiState))
+            .catch(() => onCopyProtestInfoFailure(uiState));
+    } catch {
+        onCopyProtestInfoFailure(uiState);
+    }
+}
+
+function onCopyProtestInfoSuccess(uiState: UIState): void {
+    uiState.dialogState.showOKMessageDialog({
+        title: "Copied",
+        message: "Protest info has been copied to clipboard.",
+    });
+}
+
+function onCopyProtestInfoFailure(uiState: UIState): void {
+    uiState.dialogState.showOKMessageDialog({
+        title: "Error",
+        message: "Unable to copy protest info to clipboard. Please allow MODAQ access to the clipboard.",
+    });
 }
 
 function onPlayerLeaveClick(
@@ -783,13 +1081,13 @@ function onPlayerLeaveClick(
 
     const appState: AppState = item.data.appState;
 
-    appState.uiState.dialogState.showOKCancelMessageDialog(
-        "Let Player Leave",
-        `Are you sure you want to let the player "${item.data.activePlayer.name}" from team "${
+    appState.uiState.dialogState.showOKCancelMessageDialog({
+        title: "Let Player Leave",
+        message: `Are you sure you want to let the player "${item.data.activePlayer.name}" from team "${
             item.data.activePlayer.teamName
         }" leave the game before question #${appState.uiState.cycleIndex + 1}?`,
-        () => appState.game.cycles[appState.uiState.cycleIndex].addPlayerLeaves(item.data.activePlayer)
-    );
+        onOK: () => appState.activeGame.cycles[appState.uiState.cycleIndex].addPlayerLeaves(item.data.activePlayer),
+    });
 }
 
 function onRenamePlayerClick(
@@ -816,7 +1114,7 @@ function onSwapPlayerClick(
         return;
     }
 
-    const { uiState, game } = item.data.appState;
+    const { uiState, activeGame: game } = item.data.appState;
     const cycleIndex: number = uiState.cycleIndex;
     const halftimeIndex: number = Math.floor(game.gameFormat.regulationTossupCount / 2);
 
@@ -831,13 +1129,13 @@ function onSwapPlayerClick(
         Math.abs(cycleIndex - halftimeIndex) <= 1
             ? ` If you want to substitute a player at halftime, do it on question ${Math.floor(halftimeIndex + 1)}.`
             : "";
-    item.data.appState.uiState.dialogState.showOKCancelMessageDialog(
-        "Substitute Player",
-        `You are substituting players outside of a normal time (beginning of the game, after halftime, overtime). Are you sure you want to substitute before question #${
-            cycleIndex + 1
-        }?` + additionalHint,
-        () => game.cycles[uiState.cycleIndex].addSwapSubstitution(item.data.player, item.data.activePlayer)
-    );
+    item.data.appState.uiState.dialogState.showOKCancelMessageDialog({
+        title: "Substitute Player",
+        message:
+            `You are substituting players outside of a normal time (beginning of the game, after halftime, overtime). Are you sure you want to substitute before question #${cycleIndex + 1
+            }?` + additionalHint,
+        onOK: () => game.cycles[uiState.cycleIndex].addSwapSubstitution(item.data.player, item.data.activePlayer),
+    });
 }
 
 function isSubMenuItemData(data: ISubMenuItemData | undefined): data is ISubMenuItemData {

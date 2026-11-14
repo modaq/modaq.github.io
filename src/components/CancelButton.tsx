@@ -3,13 +3,13 @@ import { observer } from "mobx-react-lite";
 
 import { IIconProps, ITheme, memoizeFunction, mergeStyleSets, ThemeContext } from "@fluentui/react";
 import { IconButton } from "@fluentui/react/lib/Button";
-import { StateContext } from "../contexts/StateContext";
+import { useAppState } from "../contexts/StateContext";
 import { AppState } from "../state/AppState";
 
 const deleteIconProps: IIconProps = { iconName: "Cancel" };
 
 export const CancelButton = observer(function CancelButton(props: ICancelButtonProps): JSX.Element {
-    const appState: AppState = React.useContext(StateContext);
+    const appState: AppState = useAppState();
 
     const onClick: () => void = () => {
         if (props.prompt == undefined) {
@@ -17,7 +17,11 @@ export const CancelButton = observer(function CancelButton(props: ICancelButtonP
             return;
         }
 
-        appState.uiState.dialogState.showOKCancelMessageDialog(props.prompt.title, props.prompt.message, props.onClick);
+        appState.uiState.dialogState.showOKCancelMessageDialog({
+            title: props.prompt.title,
+            message: props.prompt.message,
+            onOK: props.onClick,
+        });
     };
 
     return (
@@ -28,7 +32,11 @@ export const CancelButton = observer(function CancelButton(props: ICancelButtonP
                 return (
                     <IconButton
                         ariaLabel={props.tooltip}
-                        className={classes.cancelButton}
+                        className={
+                            props.className == undefined
+                                ? classes.cancelButton
+                                : `${classes.cancelButton} ${props.className}`
+                        }
                         disabled={props.disabled}
                         iconProps={deleteIconProps}
                         title={props.tooltip}
@@ -41,6 +49,7 @@ export const CancelButton = observer(function CancelButton(props: ICancelButtonP
 });
 
 export interface ICancelButtonProps {
+    className?: string;
     disabled?: boolean;
     prompt?: ICancelButtonPrompt;
     tooltip: string;

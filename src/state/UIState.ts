@@ -22,11 +22,20 @@ import { BuzzMenuState } from "./BuzzMenuState";
 import { ICustomExport } from "./CustomExport";
 import { ModalVisibilityStatus } from "./ModalVisibilityStatus";
 import { IPacketParseStatus } from "./IPacketParseStatus";
+import { IPacket } from "./IPacket";
+import { IHostSettings } from "./IHostSettings";
+import { IBuzzPointPlacement } from "./IBuzzPointPlacement";
+import { IBuzzFeedback } from "./IBuzzFeedback";
+import { IViewSettings } from "./IViewSettings";
 
 // TODO: Look into breaking this up into individual UI component states. Lots of pendingX fields, which could be in
 // their own (see CustomizeGameFormatDialogState)
 // Alternatively, keep certain component-local states in the component state, and only store values that could be used
 // outside of that component here.
+
+// How many words the buzz point can be offset from the reader's detected position
+export const buzzPointWordOffsets = [-4, -3, -2, -1, 0, 1, 2, 3, 4] as const;
+export type BuzzPointWordOffset = typeof buzzPointWordOffsets[number];
 
 const DefaultFontFamily = "Times New Roman, -apple-system, BlinkMacSystemFont, Roboto, Helvetica Neue, serif";
 
@@ -49,9 +58,6 @@ export class UIState {
     public selectedWordIndex: number;
 
     @ignore
-    public buzzMenuState: BuzzMenuState;
-
-    @ignore
     public customExportOptions: ICustomExport | undefined;
 
     @ignore
@@ -69,6 +75,22 @@ export class UIState {
     @ignore
     public hideNewGame: boolean;
 
+    // Host-supplied settings that gate host-managed UI behavior (backup-only export, QBJ-only export
+    // dialog, restricted roster changes, host-managed game format, host product name). setHostSettings
+    // normalizes the boolean flags to false so reads don't have to handle undefined.
+    @ignore
+    public hostSettings: IHostSettings;
+
+    // Injected by the host. If provided, switches the Add Questions dialog to secret-code lookup mode: given a
+    // secret code entered there, resolves to the replacement question packet, or an IStatus describing why the
+    // lookup failed.
+    @ignore
+    public onFetchQuestionById: ((id: string) => Promise<IPacket | IStatus>) | undefined;
+
+    // Injected by the host. Called with the current view settings whenever the moderator changes one of them.
+    @ignore
+    public onViewSettingsChange: ((settings: IViewSettings) => void) | undefined;
+
     @ignore
     public importGameStatus: IStatus | undefined;
 
@@ -82,9 +104,6 @@ export class UIState {
 
     @ignore
     public pendingNewGame?: IPendingNewGame;
-
-    @ignore
-    public pendingNewPlayer?: Player;
 
     @ignore
     public pendingSheet?: IPendingSheet;
@@ -110,6 +129,67 @@ export class UIState {
     // Default should be to highlight answered bonuses
     public noBonusHighlight: boolean;
 
+    // When true, listen to the microphone and move the buzz point as the reader reads the tossup
+    public trackReaderWithMicrophone: boolean;
+
+    // When true, the user has seen (and accepted) the note that speech recognition may send microphone audio to an
+    // online service, so it isn't shown again when following the reader is turned on
+    public hasAcceptedSpeechPrivacyNotice: boolean;
+
+    // When true, buzzes are recorded with the original buzz menu (a dropdown on the word) instead of the player pad
+    public useBuzzMenu: boolean;
+
+    @ignore
+    public buzzMenuState: BuzzMenuState;
+
+    // When true, microphone tracking highlights where the reader is while they read. By default the reader's
+    // position is tracked in the background and only shown when the user presses Space (the buzz shortcut).
+    public showReaderPositionWhileReading: boolean;
+
+    // When true, the highlight shown while reading (see showReaderPositionWhileReading) moves to the reader's
+    // position immediately, instead of waiting for the reading to pause. More responsive, but it jitters with
+    // the recognizer's bursts.
+    public instantReaderHighlight: boolean;
+
+    // Words to offset the buzz point from the reader's detected position when pressing Space (-4 to +4). Lets
+    // the user compensate for recognition lag/lead so the buzz lands on the right word. 0 means no offset.
+    public buzzPointWordOffset: BuzzPointWordOffset;
+
+    // When true, show diagnostics for the microphone tracking (engine, status, last heard words, and the reader's
+    // position).
+    @ignore
+    public showReaderFollowerDebug: boolean;
+
+    @ignore
+    public readerFollowerEngine: string | undefined;
+
+    @ignore
+    public readerFollowerStatus: string | undefined;
+
+    @ignore
+    public readerFollowerTranscript: string | undefined;
+
+    // Where the reader currently is, before the pause delay moves the buzz point there
+    @ignore
+    public readerFollowerLivePosition: number;
+
+    // The last event that made the buzz point update immediately (buzz sound, "correct"/"incorrect"/etc.)
+    @ignore
+    public readerFollowerLastCue: string | undefined;
+
+    // Set while the moderator is placing the buzz point with the keyboard: Space picks a starting word, the arrow
+    // keys move it, and Space again opens the buzz menu there
+    @ignore
+    public buzzPointPlacement: IBuzzPointPlacement | undefined;
+
+    // Incremented to make microphone tracking restart (e.g. after a faster speech model was installed)
+    @ignore
+    public readerFollowerRestartCount: number;
+
+    // The buzz just recorded from the player pad, shown briefly so it's clear who got it right or wrong
+    @ignore
+    public buzzFeedback: IBuzzFeedback | undefined;
+
     public pronunciationGuideColor: string | undefined;
 
     public questionFontColor: string | undefined;
@@ -130,16 +210,21 @@ export class UIState {
         this.dialogState = new DialogState();
         this.isEditingCycleIndex = false;
         this.selectedWordIndex = -1;
-        this.buzzMenuState = {
-            clearSelectedWordOnClose: true,
-            visible: false,
-        };
         this.customExportOptions = undefined;
         this.customExportIntervalId = undefined;
         this.customExportStatus = undefined;
         this.exportRoundNumber = 1;
         this.hideBonusOnDeadTossup = false;
         this.hideNewGame = false;
+        this.hostSettings = {
+            promptBeforeExport: false,
+            onlyAllowQbjExport: false,
+            restrictRosterChanges: false,
+            disableChangeFormat: false,
+            productName: undefined,
+        };
+        this.onFetchQuestionById = undefined;
+        this.onViewSettingsChange = undefined;
 
         // Default to Fabric UI's default font (Segoe UI), then Times New Roman
         this.fontFamily = DefaultFontFamily;
@@ -155,9 +240,27 @@ export class UIState {
         this.packetParseStatus = undefined;
         this.pendingBonusProtestEvent = undefined;
         this.pendingNewGame = undefined;
-        this.pendingNewPlayer = undefined;
         this.pendingSheet = undefined;
         this.pendingTossupProtestEvent = undefined;
+        this.trackReaderWithMicrophone = false;
+        this.hasAcceptedSpeechPrivacyNotice = false;
+        this.useBuzzMenu = false;
+        this.buzzMenuState = {
+            clearSelectedWordOnClose: true,
+            visible: false,
+        };
+        this.showReaderPositionWhileReading = false;
+        this.instantReaderHighlight = false;
+        this.buzzPointWordOffset = 0;
+        this.showReaderFollowerDebug = false;
+        this.readerFollowerEngine = undefined;
+        this.readerFollowerStatus = undefined;
+        this.readerFollowerTranscript = undefined;
+        this.readerFollowerLivePosition = -1;
+        this.readerFollowerLastCue = undefined;
+        this.buzzPointPlacement = undefined;
+        this.readerFollowerRestartCount = 0;
+        this.buzzFeedback = undefined;
         this.useDarkMode = false;
         this.yappServiceUrl = undefined;
 
@@ -167,6 +270,23 @@ export class UIState {
         // The default font size is 16px
         this.questionFontSize = 16;
         this.sheetsState = new SheetState();
+    }
+
+    public get viewSettings(): IViewSettings {
+        return {
+            isClockHidden: this.isClockHidden,
+            isEventLogHidden: this.isEventLogHidden,
+            isPacketNameHidden: this.isPacketNameHidden,
+            isCustomExportStatusHidden: this.isCustomExportStatusHidden,
+            isScoreVertical: this.isScoreVertical,
+            noBonusHighlight: this.noBonusHighlight,
+            hideBonusOnDeadTossup: this.hideBonusOnDeadTossup,
+            useDarkMode: this.useDarkMode,
+            fontFamily: this.fontFamily,
+            questionFontSize: this.questionFontSize,
+            questionFontColor: this.questionFontColor,
+            pronunciationGuideColor: this.pronunciationGuideColor,
+        };
     }
 
     // TODO: Feels off. Could generalize to array of teams
@@ -258,11 +378,6 @@ export class UIState {
                     assertNever(this.pendingNewGame);
             }
         }
-    }
-
-    public createPendingNewPlayer(teamName: string): void {
-        this.pendingNewPlayer = new Player("", teamName, /* isStarter */ false);
-        this.dialogState.visibleDialog = ModalVisibilityStatus.AddPlayer;
     }
 
     public createPendingSheet(): void {
@@ -485,6 +600,7 @@ export class UIState {
 
             // Clear the selected words, since it's not relevant to the next question
             this.selectedWordIndex = -1;
+            this.buzzPointPlacement = undefined;
         }
     }
 
@@ -510,6 +626,67 @@ export class UIState {
 
     public setHideNewGame(value: boolean): void {
         this.hideNewGame = value;
+    }
+
+    public setHostSettings(value: IHostSettings | undefined): void {
+        this.hostSettings = {
+            promptBeforeExport: value?.promptBeforeExport ?? false,
+            onlyAllowQbjExport: value?.onlyAllowQbjExport ?? false,
+            restrictRosterChanges: value?.restrictRosterChanges ?? false,
+            disableChangeFormat: value?.disableChangeFormat ?? false,
+            productName: value?.productName,
+        };
+    }
+
+    public setOnFetchQuestionById(callback: ((id: string) => Promise<IPacket | IStatus>) | undefined): void {
+        this.onFetchQuestionById = callback;
+    }
+
+    public setOnViewSettingsChange(callback: ((settings: IViewSettings) => void) | undefined): void {
+        this.onViewSettingsChange = callback;
+    }
+
+    // Applies only the fields present in settings. Values are assigned as-is (e.g. fontFamily doesn't get the default
+    // fonts appended), so a value read from viewSettings round-trips unchanged.
+    public setViewSettings(settings: Partial<IViewSettings>): void {
+        if (settings.isClockHidden != undefined) {
+            this.isClockHidden = settings.isClockHidden;
+        }
+        if (settings.isEventLogHidden != undefined) {
+            this.isEventLogHidden = settings.isEventLogHidden;
+        }
+        if (settings.isPacketNameHidden != undefined) {
+            this.isPacketNameHidden = settings.isPacketNameHidden;
+        }
+        if (settings.isCustomExportStatusHidden != undefined) {
+            this.isCustomExportStatusHidden = settings.isCustomExportStatusHidden;
+        }
+        if (settings.isScoreVertical != undefined) {
+            this.isScoreVertical = settings.isScoreVertical;
+        }
+        if (settings.noBonusHighlight != undefined) {
+            this.noBonusHighlight = settings.noBonusHighlight;
+        }
+        if (settings.hideBonusOnDeadTossup != undefined) {
+            this.hideBonusOnDeadTossup = settings.hideBonusOnDeadTossup;
+        }
+        if (settings.useDarkMode != undefined) {
+            this.useDarkMode = settings.useDarkMode;
+        }
+        if (settings.fontFamily != undefined && settings.fontFamily.trim() !== "") {
+            this.fontFamily = settings.fontFamily;
+        }
+        if (settings.questionFontSize != undefined && settings.questionFontSize > 0) {
+            this.questionFontSize = settings.questionFontSize;
+        }
+
+        // The colors can be explicitly reset to undefined (use the theme's color), so check for the key instead
+        if ("questionFontColor" in settings) {
+            this.questionFontColor = settings.questionFontColor;
+        }
+        if ("pronunciationGuideColor" in settings) {
+            this.pronunciationGuideColor = settings.pronunciationGuideColor;
+        }
     }
 
     public setImportGameStatus(status: IStatus): void {
@@ -553,6 +730,60 @@ export class UIState {
         this.dialogState.visibleDialog = ModalVisibilityStatus.TossupProtest;
     }
 
+    public showRemoveTossupProtestDialog(cycle: Cycle, teamName: string): void {
+        const existingProtest: ITossupProtestEvent | undefined = cycle.tossupProtests?.find(
+            (protest) => protest.teamName === teamName
+        );
+        if (existingProtest == undefined) {
+            return;
+        }
+
+        this.dialogState.showYesNoCancelMessageDialog({
+            title: "Remove protest",
+            message: `Do you want to remove or edit the tossup protest for "${teamName}"?`,
+            yesLabel: "Remove",
+            noLabel: "Edit",
+            onYes: () => {
+                cycle.removeTossupProtest(teamName);
+            },
+            onNo: () => {
+                this.setPendingTossupProtest(teamName, existingProtest.questionIndex, existingProtest.position);
+
+                if (this.pendingTossupProtestEvent != undefined) {
+                    this.pendingTossupProtestEvent.givenAnswer = existingProtest.givenAnswer ?? "";
+                    this.pendingTossupProtestEvent.reason = existingProtest.reason;
+                }
+            },
+        });
+    }
+
+    public showRemoveBonusProtestDialog(cycle: Cycle, partIndex: number): void {
+        const existingProtest: IBonusProtestEvent | undefined = cycle.bonusProtests?.find(
+            (protest) => protest.partIndex === partIndex
+        );
+        if (existingProtest == undefined) {
+            return;
+        }
+
+        this.dialogState.showYesNoCancelMessageDialog({
+            title: "Remove protest",
+            message: `Do you want to remove or edit the bonus protest for part ${partIndex + 1}?`,
+            yesLabel: "Remove",
+            noLabel: "Edit",
+            onYes: () => {
+                cycle.removeBonusProtest(partIndex);
+            },
+            onNo: () => {
+                this.setPendingBonusProtest(existingProtest.teamName, existingProtest.questionIndex, partIndex);
+
+                if (this.pendingBonusProtestEvent != undefined) {
+                    this.pendingBonusProtestEvent.givenAnswer = existingProtest.givenAnswer ?? "";
+                    this.pendingBonusProtestEvent.reason = existingProtest.reason;
+                }
+            },
+        });
+    }
+
     public setPronunciationGuideColor(color: string | undefined): void {
         this.pronunciationGuideColor = color;
     }
@@ -567,6 +798,62 @@ export class UIState {
 
     public setSelectedWordIndex(newIndex: number): void {
         this.selectedWordIndex = newIndex;
+    }
+
+    public toggleShowReaderPositionWhileReading(): void {
+        this.showReaderPositionWhileReading = !this.showReaderPositionWhileReading;
+    }
+
+    public toggleInstantReaderHighlight(): void {
+        this.instantReaderHighlight = !this.instantReaderHighlight;
+    }
+
+    public setBuzzPointWordOffset(offset: BuzzPointWordOffset): void {
+        this.buzzPointWordOffset = offset;
+    }
+
+    // The offset is restored from storage without going through the setter, so reset a value that isn't supported
+    public validateBuzzPointWordOffset(): void {
+        if (!(buzzPointWordOffsets as readonly number[]).includes(this.buzzPointWordOffset)) {
+            this.buzzPointWordOffset = 0;
+        }
+    }
+
+    public setTrackReaderWithMicrophone(value: boolean): void {
+        this.trackReaderWithMicrophone = value;
+
+        if (!value) {
+            this.readerFollowerEngine = undefined;
+            this.readerFollowerStatus = undefined;
+            this.readerFollowerTranscript = undefined;
+            this.readerFollowerLivePosition = -1;
+            this.readerFollowerLastCue = undefined;
+        }
+    }
+
+    public acceptSpeechPrivacyNotice(): void {
+        this.hasAcceptedSpeechPrivacyNotice = true;
+    }
+
+    public setReaderFollowerLivePosition(position: number): void {
+        this.readerFollowerLivePosition = position;
+    }
+
+    public setReaderFollowerLastCue(cue: string): void {
+        this.readerFollowerLastCue = cue;
+    }
+
+    public setReaderFollowerStatus(engine: string, status: string): void {
+        this.readerFollowerEngine = engine;
+        this.readerFollowerStatus = status;
+    }
+
+    public setReaderFollowerTranscript(transcript: string): void {
+        this.readerFollowerTranscript = transcript;
+    }
+
+    public toggleReaderFollowerDebug(): void {
+        this.showReaderFollowerDebug = !this.showReaderFollowerDebug;
     }
 
     public setYappServiceUrl(url: string | undefined): void {
@@ -603,10 +890,6 @@ export class UIState {
 
     public toggleScoreVerticality(): void {
         this.isScoreVertical = !this.isScoreVertical;
-    }
-
-    public hideBuzzMenu(): void {
-        this.buzzMenuState.visible = false;
     }
 
     public resetCustomExport(): void {
@@ -652,11 +935,6 @@ export class UIState {
         }
     }
 
-    public resetPendingNewPlayer(): void {
-        this.pendingNewPlayer = undefined;
-        this.dialogState.visibleDialog = ModalVisibilityStatus.None;
-    }
-
     public resetPendingSheet(): void {
         this.pendingSheet = undefined;
         this.dialogState.visibleDialog = ModalVisibilityStatus.None;
@@ -672,9 +950,60 @@ export class UIState {
         this.sheetsState.sheetType = undefined;
     }
 
+    public hideBuzzMenu(): void {
+        this.buzzMenuState.visible = false;
+    }
+
     public showBuzzMenu(clearSelectedWordOnClose: boolean): void {
+        this.buzzPointPlacement = undefined;
         this.buzzMenuState.visible = true;
         this.buzzMenuState.clearSelectedWordOnClose = clearSelectedWordOnClose;
+    }
+
+    public toggleUseBuzzMenu(): void {
+        this.useBuzzMenu = !this.useBuzzMenu;
+        this.buzzPointPlacement = undefined;
+        this.buzzMenuState.visible = false;
+    }
+
+    public startBuzzPointPlacement(placement: IBuzzPointPlacement): void {
+        this.buzzPointPlacement = placement;
+    }
+
+    public markBuzzPointPlacementMoved(): void {
+        if (this.buzzPointPlacement != undefined) {
+            this.buzzPointPlacement.movedManually = true;
+        }
+    }
+
+    public confirmBuzzPointPlacement(): void {
+        if (this.buzzPointPlacement != undefined) {
+            this.buzzPointPlacement.startedByBuzzSound = false;
+        }
+    }
+
+    public setBuzzPointPlacementLatestLivePosition(position: number): void {
+        if (this.buzzPointPlacement != undefined) {
+            this.buzzPointPlacement.latestLivePosition = position;
+        }
+    }
+
+    public endBuzzPointPlacement(): void {
+        this.buzzPointPlacement = undefined;
+    }
+
+    public showBuzzFeedback(feedback: Omit<IBuzzFeedback, "id">): void {
+        this.buzzFeedback = { ...feedback, id: (this.buzzFeedback?.id ?? 0) + 1 };
+    }
+
+    public clearBuzzFeedback(id: number): void {
+        if (this.buzzFeedback?.id === id) {
+            this.buzzFeedback = undefined;
+        }
+    }
+
+    public restartReaderFollower(): void {
+        this.readerFollowerRestartCount++;
     }
 
     // We have to do this call here because this is where the information is available
@@ -708,22 +1037,6 @@ export class UIState {
             const partIndex = typeof part === "string" ? parseInt(part, 10) : part;
             this.pendingBonusProtestEvent.partIndex = partIndex;
         }
-    }
-
-    public updatePendingNewPlayerName(name: string): void {
-        if (this.pendingNewPlayer == undefined) {
-            return;
-        }
-
-        this.pendingNewPlayer.name = name;
-    }
-
-    public updatePendingNewPlayerTeamName(teamName: string): void {
-        if (this.pendingNewPlayer == undefined) {
-            return;
-        }
-
-        this.pendingNewPlayer.teamName = teamName;
     }
 
     public updatePendingSheetRoundNumber(roundNumber: number): void {

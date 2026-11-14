@@ -3,7 +3,7 @@ import { Icon, IIconStyles, ILabelStyles, Label, mergeStyleSets, Stack, StackIte
 import { observer } from "mobx-react-lite";
 
 import { AppState } from "../state/AppState";
-import { StateContext } from "../contexts/StateContext";
+import { useAppState } from "../contexts/StateContext";
 
 const labelStyles: ILabelStyles = {
     root: {
@@ -16,11 +16,11 @@ const scoreCellStyle: React.CSSProperties = {
 };
 
 export const Scoreboard = observer(function Scoreboard() {
-    const appState: AppState = React.useContext(StateContext);
+    const appState: AppState = useAppState();
     const classes: IScoreboardStyle = getClassNames();
 
-    const scores: number[] = appState.game.finalScore;
-    const teamNames = appState.game.teamNames;
+    const scores: number[] = appState.activeGame.finalScore;
+    const teamNames = appState.activeGame.teamNames;
     let label: JSX.Element | undefined;
     if (appState.uiState.isScoreVertical) {
         label = (
@@ -49,7 +49,7 @@ export const Scoreboard = observer(function Scoreboard() {
 
     const protestIndicator = <ProtestIndicator />;
     return (
-        <div className={classes.board}>
+        <div className={`${classes.board} scoreboard`}>
             <Stack>
                 <StackItem>{label}</StackItem>
                 {protestIndicator != undefined && (
@@ -63,9 +63,9 @@ export const Scoreboard = observer(function Scoreboard() {
 });
 
 const ProtestIndicator = observer(function ProtestIndicator() {
-    const appState: AppState = React.useContext(StateContext);
+    const appState: AppState = useAppState();
 
-    return appState.game.protestsMatter ? (
+    return appState.activeGame.protestsMatter ? (
         <Stack horizontal={true}>
             <StackItem>
                 <Icon iconName="Warning" styles={warningIconStyles} />

@@ -42,6 +42,9 @@ export interface IBonusProtestEvent extends IProtestEvent {
 
 export interface IPlayerJoinsEvent {
     inPlayer: IPlayer;
+
+    // Assume that undefined is false. This is because in older versions, all joins were active, so this value would be undefined..
+    isInactive?: boolean | undefined;
 }
 
 export interface IPlayerLeavesEvent {
@@ -59,6 +62,10 @@ export interface ITimeoutEvent {
 
 export interface IThrowOutQuestionEvent {
     questionIndex: number;
+    // Set for protest replacements, which pull from the end of the packet rather than the next sequential question.
+    // Undefined means the next sequential question is used as the replacement, which preserves the original
+    // behavior from before this property was added.
+    replacementQuestionIndex?: number;
 }
 
 export type PlayerChangeEvent = IPlayerJoinsEvent | IPlayerLeavesEvent | ISubstitutionEvent;

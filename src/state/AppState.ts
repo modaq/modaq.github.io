@@ -1,4 +1,4 @@
-import { assertNever } from "@fluentui/utilities";
+import { assertNever } from "@fluentui/react";
 import { makeAutoObservable } from "mobx";
 import { IStatus } from "../IStatus";
 import { ICustomExport } from "./CustomExport";
@@ -12,8 +12,6 @@ import { StatusDisplayType } from "./StatusDisplayType";
 const minimumIntervalInMs = 5000;
 
 export class AppState {
-    public static instance: AppState = new AppState();
-
     public game: GameState;
 
     public uiState: UIState;
@@ -25,9 +23,12 @@ export class AppState {
         this.uiState = new UIState();
     }
 
-    // Only use in tests
-    public static resetInstance(): void {
-        this.instance = new AppState();
+    /**
+     * The GameState that gameplay UI should read from and mutate. Today this is always the real game; it exists
+     * as a single indirection point so callers read through one accessor rather than referencing `game` directly.
+     */
+    public get activeGame(): GameState {
+        return this.game;
     }
 
     // Could do a version with callbacks. There are 4 places this gets called from, and 3 use the same callback
@@ -63,10 +64,10 @@ export class AppState {
                 if (status.isError) {
                     switch (displayType) {
                         case StatusDisplayType.MessageDialog:
-                            this.uiState.dialogState.showOKMessageDialog(
-                                "Export Error",
-                                `Export failed: ${status.status}.`
-                            );
+                            this.uiState.dialogState.showOKMessageDialog({
+                                title: "Export Error",
+                                message: `Export failed: ${status.status}.`,
+                            });
                             break;
                         case StatusDisplayType.Label:
                             this.uiState.setCustomExportStatus(`Export failed: ${status.status}.`);
@@ -78,7 +79,14 @@ export class AppState {
                     this.game.markUpdateComplete();
                     switch (displayType) {
                         case StatusDisplayType.MessageDialog:
-                            this.uiState.dialogState.showOKMessageDialog("Export Succeeded", "Export succeeded.");
+                            if (customExport.onSuccess) {
+                                customExport.onSuccess(source);
+                            } else {
+                                this.uiState.dialogState.showOKMessageDialog({
+                                    title: "Export Succeeded",
+                                    message: "Export succeeded.",
+                                });
+                            }
                             break;
                         case StatusDisplayType.Label:
                             this.uiState.setCustomExportStatus("Export successful.");
@@ -92,10 +100,10 @@ export class AppState {
                 const message = e.message ? e.message : JSON.stringify(e);
                 switch (displayType) {
                     case StatusDisplayType.MessageDialog:
-                        this.uiState.dialogState.showOKMessageDialog(
-                            "Export Error",
-                            `Error in exporting the game. Hit an exception. Exception message: ${message}`
-                        );
+                        this.uiState.dialogState.showOKMessageDialog({
+                            title: "Export Error",
+                            message: `Error in exporting the game. Hit an exception. Exception message: ${message}`,
+                        });
                         break;
                     case StatusDisplayType.Label:
                         this.uiState.setCustomExportStatus(

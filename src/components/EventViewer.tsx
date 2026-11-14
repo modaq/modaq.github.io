@@ -6,7 +6,7 @@ import { mergeStyleSets } from "@fluentui/react";
 import { CycleItemList } from "./cycleItems/CycleItemList";
 import { Cycle } from "../state/Cycle";
 import { AppState } from "../state/AppState";
-import { StateContext } from "../contexts/StateContext";
+import { useAppState } from "../contexts/StateContext";
 
 const numberKey = "number";
 const cycleKey = "cycle";
@@ -18,7 +18,7 @@ const cellClassName = "ms-List-cell";
 function dummyFunction() {}
 
 export const EventViewer = observer(function EventViewer(): JSX.Element | null {
-    const appState: AppState = React.useContext(StateContext);
+    const appState: AppState = useAppState();
     const [lastIndex, setLastIndex] = React.useState<number>(-1);
     const containerRef: React.MutableRefObject<HTMLDivElement | null> = React.useRef(null);
 
@@ -33,16 +33,13 @@ export const EventViewer = observer(function EventViewer(): JSX.Element | null {
         [appState.uiState]
     );
 
-    const renderColumnHandler = React.useCallback(
-        (item?: Cycle, index?: number, column?: IColumn): JSX.Element => {
-            if (item === undefined || index === undefined || column === undefined) {
-                return <></>;
-            }
+    const renderColumnHandler = (item?: Cycle, index?: number, column?: IColumn): JSX.Element => {
+        if (item === undefined || index === undefined || column === undefined) {
+            return <></>;
+        }
 
-            return onRenderItemColumn(item, appState, index, column);
-        },
-        [appState]
-    );
+        return onRenderItemColumn(item, appState, index, column);
+    };
 
     const columns: IColumn[] = [
         {
@@ -68,7 +65,7 @@ export const EventViewer = observer(function EventViewer(): JSX.Element | null {
             // TODO: Consider adding autoruns for scores/finalScore so we don't have to consider what context it's run
             // in. Just swapping scores with a scores2 value set during autorun didn't work initially, so it needs more
             // investigation.
-            data: appState.game.scores.slice(0, appState.game.playableCycles.length),
+            data: appState.activeGame.scores.slice(0, appState.activeGame.playableCycles.length),
         },
     ];
 
@@ -84,7 +81,7 @@ export const EventViewer = observer(function EventViewer(): JSX.Element | null {
         getSelectedIndices: () => [appState.uiState.cycleIndex],
         getSelectedCount: () => 1,
         isRangeSelected: (): boolean => false,
-        isAllSelected: () => appState.uiState.cycleIndex === appState.game.playableCycles.length,
+        isAllSelected: () => appState.uiState.cycleIndex === appState.activeGame.playableCycles.length,
         isIndexSelected: (index) => index === appState.uiState.cycleIndex,
         isKeySelected: () => false,
         setAllSelected: dummyFunction,
@@ -124,12 +121,12 @@ export const EventViewer = observer(function EventViewer(): JSX.Element | null {
 
     // This needs to re-render based on cycleIndex so it can select the current one
     return (
-        <div className={classes.eventViewerContainer} data-is-scrollable="true" ref={containerRef}>
+        <div className={`${classes.eventViewerContainer} event-viewer`} data-is-scrollable="true" ref={containerRef}>
             <DetailsList
                 checkboxVisibility={CheckboxVisibility.hidden}
                 selectionMode={SelectionMode.single}
                 columns={columns}
-                items={appState.game.playableCycles}
+                items={appState.activeGame.playableCycles}
                 onActiveItemChanged={activeItemChangedHandler}
                 onRenderItemColumn={renderColumnHandler}
                 selection={selection}
@@ -160,7 +157,7 @@ function onRenderItemColumn(item: Cycle, appState: AppState, index: number, colu
 
             return (
                 <>
-                    <CycleItemList cycle={item} game={appState.game} />
+                    <CycleItemList cycle={item} game={appState.activeGame} />
                     <Text>{`(${scoreInCurrentCycle.join(" - ")})`}</Text>
                 </>
             );
